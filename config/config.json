@@ -1,0 +1,4 @@
+{
+  "api_key_1": "YOUR_PRIMARY_API_KEY",
+  "api_key_2": "YOUR_FALLBACK_API_KEY"
+}
