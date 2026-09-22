@@ -56,8 +56,8 @@ The tool looks for `config/config.json` in the current working directory and nex
 ## Usage
 
 ```text
-vt -d <domain>  -u|-s|-a  [-o file]
-vt -l <file>    -u|-s|-a  [-o file]
+vt -d <domain>  -u|-s|-a  [-o file] [-t n]
+vt -l <file>    -u|-s|-a  [-o file] [-t n]
 ```
 
 Flags:
@@ -70,6 +70,7 @@ Flags:
 | `-s` | Extract subdomains |
 | `-a` | Extract URLs and subdomains |
 | `-o` | Save results to a file |
+| `-t` | Number of threads (default `1`) |
 | `-c` | Path to `config.json` (optional) |
 | `-h` | Show help |
 
@@ -130,6 +131,14 @@ Input file with pipeline:
 ```bash
 vt -l domains.txt -s | sort -u
 ```
+
+Multiple threads:
+
+```bash
+vt -l domains.txt -u -t 5
+```
+
+Default is **1 thread** and **1 request per second**. Use `-t` to run more workers in parallel.
 
 ## Output
 

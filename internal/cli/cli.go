@@ -2,11 +2,13 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/A-TURBO-99/vt/internal/banner"
 	"github.com/A-TURBO-99/vt/internal/config"
@@ -17,11 +19,14 @@ import (
 	"github.com/A-TURBO-99/vt/internal/vtapi"
 )
 
-const usageText = `vt — VirusTotal domain reconnaissance
+const (
+	defaultThreads    = 1
+	defaultRequestGap = time.Second
+	usageText         = `vt — VirusTotal domain reconnaissance
 
 Usage:
-  vt -d <domain>  -u|-s|-a  [-o file]
-  vt -l <file>    -u|-s|-a  [-o file]
+  vt -d <domain>  -u|-s|-a  [-o file] [-t n]
+  vt -l <file>    -u|-s|-a  [-o file] [-t n]
 
 Flags:
   -d    Single domain or subdomain
@@ -30,6 +35,7 @@ Flags:
   -s    Extract subdomains
   -a    Extract URLs and subdomains
   -o    Save results to a file
+  -t    Number of threads (default 1, 1 request/second)
   -c    Path to config.json (optional)
   -h    Show help
 
@@ -38,9 +44,11 @@ Examples:
   vt -d example.com -s
   vt -d example.com -a
   vt -l domains.txt -u
+  vt -l domains.txt -u -t 5
   vt -d example.com -u -o urls.txt
   vt -d example.com -u | sort -u
 `
+)
 
 type Options struct {
 	Domain   string
@@ -50,6 +58,7 @@ type Options struct {
 	All      bool
 	Output   string
 	Config   string
+	Threads  int
 	Help     bool
 }
 
@@ -65,6 +74,7 @@ func Parse(args []string) (Options, error) {
 	fs.BoolVar(&opt.All, "a", false, "extract URLs and subdomains")
 	fs.StringVar(&opt.Output, "o", "", "output file")
 	fs.StringVar(&opt.Config, "c", "", "config file path")
+	fs.IntVar(&opt.Threads, "t", defaultThreads, "threads")
 	fs.BoolVar(&opt.Help, "h", false, "help")
 	fs.BoolVar(&opt.Help, "help", false, "help")
 
@@ -80,16 +90,18 @@ func Parse(args []string) (Options, error) {
 func Usage() string { return usageText }
 
 type App struct {
-	Stdout io.Writer
-	Stderr io.Writer
-	Client *vtapi.Client
+	Stdout        io.Writer
+	Stderr        io.Writer
+	Client        *vtapi.Client
+	MinRequestGap time.Duration
 }
 
 func NewApp() *App {
 	return &App{
-		Stdout: os.Stdout,
-		Stderr: os.Stderr,
-		Client: vtapi.New(),
+		Stdout:        os.Stdout,
+		Stderr:        os.Stderr,
+		Client:        vtapi.New(),
+		MinRequestGap: defaultRequestGap,
 	}
 }
 
@@ -104,6 +116,11 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		fmt.Fprintln(a.Stderr)
 		fmt.Fprint(a.Stderr, usageText)
 		return 0
+	}
+
+	if opt.Threads < 1 {
+		fmt.Fprintf(a.Stderr, "[-] -t must be at least 1\n\n%s", usageText)
+		return 2
 	}
 
 	mode, err := extract.ParseMode(opt.URLs, opt.Subs, opt.All)
@@ -143,32 +160,38 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		client = vtapi.New()
 	}
 
+	gap := time.Duration(0)
+	if opt.Threads == 1 {
+		gap = a.MinRequestGap
+	}
+	slots := startWorkers(ctx, client, cfg, targets, mode, opt.Threads, newRateLimiter(gap))
+
 	globalURLs := unique.New()
 	globalSubs := unique.New()
 	failures := 0
 
-	for _, domain := range targets {
-		if err := ctx.Err(); err != nil {
-			out.Errorf("interrupted")
-			return 1
-		}
-
+	for i, domain := range targets {
 		out.Statusf("[+] Processing: %s", domain)
 
-		body, err := fetchWithFallback(ctx, client, domain, cfg)
-		if err != nil {
-			out.Errorf("%s: %s", domain, sanitizeUserError(err))
+		var outcome domainOutcome
+		select {
+		case <-ctx.Done():
+			out.Errorf("interrupted")
+			return 1
+		case outcome = <-slots[i]:
+		}
+
+		if outcome.err != nil {
+			if errors.Is(outcome.err, context.Canceled) || errors.Is(outcome.err, context.DeadlineExceeded) {
+				out.Errorf("interrupted")
+				return 1
+			}
+			out.Errorf("%s: %s", domain, sanitizeUserError(outcome.err))
 			failures++
 			continue
 		}
 
-		res, err := extract.FromJSON(body, mode)
-		if err != nil {
-			out.Errorf("%s: %s", domain, err.Error())
-			failures++
-			continue
-		}
-
+		res := outcome.res
 		if mode == extract.ModeURLs || mode == extract.ModeAll {
 			out.Statusf("[+] Found %d URLs", len(res.URLs))
 		}

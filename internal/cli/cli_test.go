@@ -181,6 +181,65 @@ func TestMissingMode(t *testing.T) {
 	}
 }
 
+func TestInvalidThreads(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+	code := app.Run(context.Background(), []string{"-d", "example.com", "-u", "-t", "0"})
+	if code != 2 {
+		t.Fatalf("exit=%d", code)
+	}
+}
+
+func TestParseDefaultThreads(t *testing.T) {
+	opt, err := Parse([]string{"-d", "example.com", "-u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opt.Threads != 1 {
+		t.Fatalf("threads=%d", opt.Threads)
+	}
+}
+
+func TestThreadsProcessAll(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		domain := r.URL.Query().Get("domain")
+		io.WriteString(w, `{"response_code":1,"subdomains":["`+domain+`.ok"]}`)
+	}))
+	defer srv.Close()
+
+	list := filepath.Join(t.TempDir(), "domains.txt")
+	if err := os.WriteFile(list, []byte("a.com\nb.com\nc.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Client: vtapi.NewWithOptions(srv.URL, srv.Client()),
+	}
+	cfg := writeConfig(t, "k1", "")
+	code := app.Run(context.Background(), []string{"-l", list, "-s", "-t", "3", "-c", cfg})
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	if hits.Load() != 3 {
+		t.Fatalf("hits=%d", hits.Load())
+	}
+	got := splitLines(stdout.String())
+	want := map[string]bool{"a.com.ok": true, "b.com.ok": true, "c.com.ok": true}
+	if len(got) != 3 {
+		t.Fatalf("lines=%v", got)
+	}
+	for _, line := range got {
+		if !want[line] {
+			t.Fatalf("unexpected %q in %v", line, got)
+		}
+	}
+}
+
 func TestHelp(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	app := &App{Stdout: &stdout, Stderr: &stderr}
