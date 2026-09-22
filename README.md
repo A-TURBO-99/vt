@@ -23,13 +23,12 @@ Optional:
 
 ```bash
 go install github.com/A-TURBO-99/vt/cmd/vt@latest
+cp ~/go/bin/vt /usr/local/bin;
 ```
 
 ## Configuration
 
 API keys are **not** passed on the command line.
-
-Copy the example file and edit it:
 
 ```bash
 cp config/config.json.example config/config.json
