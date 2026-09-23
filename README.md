@@ -124,25 +124,3 @@ vt -l domains.txt -u -t 5 -dl 0.5
 Defaults are **1 thread** and a **1 second delay** between requests. Use `-t` to run more workers in parallel and `-dl` to change the spacing (`-dl 0` disables the delay).
 
 
-## Input files
-
-`-l` reads one domain per line.
-
-- Empty lines are ignored
-- Surrounding whitespace is trimmed
-- Duplicate targets are skipped
-
-## Project layout
-
-```text
-cmd/vt/              entrypoint
-internal/cli/        flags and run loop
-internal/config/     API key file
-internal/vtapi/      VirusTotal HTTP client
-internal/extract/    JSON parsing and extraction
-internal/input/      domain and file loading
-internal/output/     stdout / stderr / -o
-internal/unique/     order-preserving dedupe
-internal/banner/     startup banner
-config/              API key configuration
-```
