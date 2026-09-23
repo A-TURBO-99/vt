@@ -25,19 +25,20 @@ const (
 	usageText         = `vt — VirusTotal domain reconnaissance
 
 Usage:
-  vt -d <domain>  -u|-s|-a  [-o file] [-t n]
-  vt -l <file>    -u|-s|-a  [-o file] [-t n]
+  vt -d <domain>  -u|-s|-a  [-o file] [-t n] [-dl seconds]
+  vt -l <file>    -u|-s|-a  [-o file] [-t n] [-dl seconds]
 
 Flags:
-  -d    Single domain or subdomain
-  -l    File with one domain per line
-  -u    Extract URLs
-  -s    Extract subdomains
-  -a    Extract URLs and subdomains
-  -o    Save results to a file
-  -t    Number of threads (default 1, 1 request/second)
-  -c    Path to config.json (optional)
-  -h    Show help
+  -d     Single domain or subdomain
+  -l     File with one domain per line
+  -u     Extract URLs
+  -s     Extract subdomains
+  -a     Extract URLs and subdomains
+  -o     Save results to a file
+  -t     Number of threads (default 1)
+  -dl    Delay in seconds between requests (default 1, 0 disables)
+  -c     Path to config.json (optional)
+  -h     Show help
 
 Examples:
   vt -d example.com -u
@@ -45,6 +46,7 @@ Examples:
   vt -d example.com -a
   vt -l domains.txt -u
   vt -l domains.txt -u -t 5
+  vt -l domains.txt -u -t 5 -dl 0.5
   vt -d example.com -u -o urls.txt
   vt -d example.com -u | sort -u
 `
@@ -59,6 +61,8 @@ type Options struct {
 	Output   string
 	Config   string
 	Threads  int
+	Delay    float64
+	DelaySet bool
 	Help     bool
 }
 
@@ -75,6 +79,7 @@ func Parse(args []string) (Options, error) {
 	fs.StringVar(&opt.Output, "o", "", "output file")
 	fs.StringVar(&opt.Config, "c", "", "config file path")
 	fs.IntVar(&opt.Threads, "t", defaultThreads, "threads")
+	fs.Float64Var(&opt.Delay, "dl", 1, "delay in seconds between requests")
 	fs.BoolVar(&opt.Help, "h", false, "help")
 	fs.BoolVar(&opt.Help, "help", false, "help")
 
@@ -84,24 +89,30 @@ func Parse(args []string) (Options, error) {
 	if fs.NArg() > 0 {
 		return Options{}, fmt.Errorf("unexpected argument: %s\n\n%s", fs.Arg(0), usageText)
 	}
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "dl" {
+			opt.DelaySet = true
+		}
+	})
 	return opt, nil
 }
 
 func Usage() string { return usageText }
 
 type App struct {
-	Stdout        io.Writer
-	Stderr        io.Writer
-	Client        *vtapi.Client
-	MinRequestGap time.Duration
+	Stdout io.Writer
+	Stderr io.Writer
+	Client *vtapi.Client
+	// DefaultDelay is used when -dl is not supplied on the command line.
+	DefaultDelay time.Duration
 }
 
 func NewApp() *App {
 	return &App{
-		Stdout:        os.Stdout,
-		Stderr:        os.Stderr,
-		Client:        vtapi.New(),
-		MinRequestGap: defaultRequestGap,
+		Stdout:       os.Stdout,
+		Stderr:       os.Stderr,
+		Client:       vtapi.New(),
+		DefaultDelay: defaultRequestGap,
 	}
 }
 
@@ -120,6 +131,11 @@ func (a *App) Run(ctx context.Context, args []string) int {
 
 	if opt.Threads < 1 {
 		fmt.Fprintf(a.Stderr, "[-] -t must be at least 1\n\n%s", usageText)
+		return 2
+	}
+
+	if opt.DelaySet && opt.Delay < 0 {
+		fmt.Fprintf(a.Stderr, "[-] -dl cannot be negative\n\n%s", usageText)
 		return 2
 	}
 
@@ -160,11 +176,15 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		client = vtapi.New()
 	}
 
-	gap := time.Duration(0)
-	if opt.Threads == 1 {
-		gap = a.MinRequestGap
+	gap := a.DefaultDelay
+	if opt.DelaySet {
+		gap = time.Duration(opt.Delay * float64(time.Second))
 	}
-	slots := startWorkers(ctx, client, cfg, targets, mode, opt.Threads, newRateLimiter(gap))
+	if gap < 0 {
+		gap = 0
+	}
+	rotator := newKeyRotator(cfg.Keys(), client, out)
+	slots := startWorkers(ctx, rotator, targets, mode, opt.Threads, newRateLimiter(gap))
 
 	globalURLs := unique.New()
 	globalSubs := unique.New()
@@ -231,27 +251,6 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		return 1
 	}
 	return 0
-}
-
-func fetchWithFallback(ctx context.Context, client *vtapi.Client, domain string, cfg config.Config) ([]byte, error) {
-	body, err := client.Fetch(ctx, domain, cfg.Primary())
-	if err == nil {
-		return body, nil
-	}
-	if !vtapi.IsKeyError(err) {
-		return nil, err
-	}
-	if cfg.Fallback() == "" {
-		return nil, err
-	}
-	body, err2 := client.Fetch(ctx, domain, cfg.Fallback())
-	if err2 != nil {
-		if vtapi.IsKeyError(err2) {
-			return nil, fmt.Errorf("primary and fallback API keys could not complete the request")
-		}
-		return nil, err2
-	}
-	return body, nil
 }
 
 func takeNew(set *unique.Set, values []string) []string {

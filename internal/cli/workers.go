@@ -4,9 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/A-TURBO-99/vt/internal/config"
 	"github.com/A-TURBO-99/vt/internal/extract"
-	"github.com/A-TURBO-99/vt/internal/vtapi"
 )
 
 type domainOutcome struct {
@@ -15,7 +13,7 @@ type domainOutcome struct {
 	err    error
 }
 
-func startWorkers(ctx context.Context, client *vtapi.Client, cfg config.Config, targets []string, mode extract.Mode, threads int, limiter *rateLimiter) []<-chan domainOutcome {
+func startWorkers(ctx context.Context, rotator *keyRotator, targets []string, mode extract.Mode, threads int, limiter *rateLimiter) []<-chan domainOutcome {
 	n := len(targets)
 	slots := make([]chan domainOutcome, n)
 	out := make([]<-chan domainOutcome, n)
@@ -52,7 +50,7 @@ func startWorkers(ctx context.Context, client *vtapi.Client, cfg config.Config, 
 					continue
 				}
 
-				body, err := fetchWithFallback(ctx, client, domain, cfg)
+				body, err := rotator.Fetch(ctx, domain)
 				if err != nil {
 					slots[idx] <- domainOutcome{domain: domain, err: err}
 					continue

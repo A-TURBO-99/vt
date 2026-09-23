@@ -3,22 +3,33 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/A-TURBO-99/vt/internal/vtapi"
 )
 
-func writeConfig(t *testing.T, primary, fallback string) string {
+func writeConfig(t *testing.T, keys ...string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.json")
-	body := `{"api_key_1":"` + primary + `","api_key_2":"` + fallback + `"}`
+	fields := make([]string, 0, 5)
+	for i := 0; i < 5; i++ {
+		val := ""
+		if i < len(keys) {
+			val = keys[i]
+		}
+		fields = append(fields, fmt.Sprintf(`"api_key_%d":"%s"`, i+1, val))
+	}
+	body := "{" + strings.Join(fields, ",") + "}"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -66,6 +77,78 @@ func TestRunExtractsURLs(t *testing.T) {
 	}
 	if lines[0] != "https://example.com/page" || lines[1] != "https://example.com/" {
 		t.Fatalf("lines=%v", lines)
+	}
+}
+
+func TestQuotaRotatesThroughKeys(t *testing.T) {
+	var mu sync.Mutex
+	var used []string
+	counts := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := r.URL.Query().Get("apikey")
+		domain := r.URL.Query().Get("domain")
+		mu.Lock()
+		used = append(used, key)
+		counts[key]++
+		n := counts[key]
+		mu.Unlock()
+
+		switch key {
+		case "k1":
+			if n >= 2 {
+				w.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
+		case "k2":
+			if n >= 2 {
+				w.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
+		case "k3":
+		default:
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		io.WriteString(w, `{"response_code":1,"subdomains":["`+domain+`.ok"]}`)
+	}))
+	defer srv.Close()
+
+	list := filepath.Join(t.TempDir(), "domains.txt")
+	if err := os.WriteFile(list, []byte("a.com\nb.com\nc.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Client: vtapi.NewWithOptions(srv.URL, srv.Client()),
+	}
+	cfg := writeConfig(t, "k1", "k2", "k3", "k4", "k5")
+	code := app.Run(context.Background(), []string{"-l", list, "-s", "-t", "1", "-c", cfg})
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+
+	got := splitLines(stdout.String())
+	if len(got) != 3 {
+		t.Fatalf("lines=%v stderr=%s", got, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "API rate limit or quota exceeded") {
+		t.Fatalf("missing quota message: %s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Switching to the next API key") {
+		t.Fatalf("missing switch message: %s", stderr.String())
+	}
+	for _, key := range []string{"k1", "k2", "k3", "k4", "k5"} {
+		if strings.Contains(stderr.String(), key) || strings.Contains(stdout.String(), key) {
+			t.Fatalf("api key leaked: %s", key)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(used) < 3 {
+		t.Fatalf("used=%v", used)
 	}
 }
 
@@ -178,6 +261,90 @@ func TestMissingMode(t *testing.T) {
 	code := app.Run(context.Background(), []string{"-d", "example.com"})
 	if code != 2 {
 		t.Fatalf("exit=%d", code)
+	}
+}
+
+func TestParseDelay(t *testing.T) {
+	opt, err := Parse([]string{"-d", "example.com", "-u", "-dl", "0.5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opt.DelaySet || opt.Delay != 0.5 {
+		t.Fatalf("delay=%v set=%v", opt.Delay, opt.DelaySet)
+	}
+
+	def, err := Parse([]string{"-d", "example.com", "-u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def.DelaySet {
+		t.Fatal("delay should not be marked as set")
+	}
+}
+
+func TestInvalidDelay(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+	code := app.Run(context.Background(), []string{"-d", "example.com", "-u", "-dl", "-1"})
+	if code != 2 {
+		t.Fatalf("exit=%d", code)
+	}
+}
+
+func TestDelayAppliedBetweenRequests(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"response_code":1,"subdomains":["ok"]}`)
+	}))
+	defer srv.Close()
+
+	list := filepath.Join(t.TempDir(), "domains.txt")
+	if err := os.WriteFile(list, []byte("a.com\nb.com\nc.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Client: vtapi.NewWithOptions(srv.URL, srv.Client()),
+	}
+	cfg := writeConfig(t, "k1")
+	start := time.Now()
+	code := app.Run(context.Background(), []string{"-l", list, "-s", "-t", "1", "-dl", "0.05", "-c", cfg})
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	if elapsed := time.Since(start); elapsed < 90*time.Millisecond {
+		t.Fatalf("delay not applied, elapsed=%s", elapsed)
+	}
+}
+
+func TestDefaultDelayUsedWhenFlagAbsent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"response_code":1,"subdomains":["ok"]}`)
+	}))
+	defer srv.Close()
+
+	list := filepath.Join(t.TempDir(), "domains.txt")
+	if err := os.WriteFile(list, []byte("a.com\nb.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		Client:       vtapi.NewWithOptions(srv.URL, srv.Client()),
+		DefaultDelay: 50 * time.Millisecond,
+	}
+	cfg := writeConfig(t, "k1")
+	start := time.Now()
+	code := app.Run(context.Background(), []string{"-l", list, "-s", "-t", "1", "-c", cfg})
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	if elapsed := time.Since(start); elapsed < 40*time.Millisecond {
+		t.Fatalf("default delay not applied, elapsed=%s", elapsed)
 	}
 }
 

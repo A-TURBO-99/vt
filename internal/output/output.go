@@ -6,9 +6,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 type Writer struct {
+	mu     sync.Mutex
 	stdout io.Writer
 	stderr io.Writer
 	file   io.WriteCloser
@@ -41,14 +43,20 @@ func New(stdout, stderr io.Writer, path string) (*Writer, error) {
 }
 
 func (w *Writer) Statusf(format string, args ...any) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	fmt.Fprintf(w.stderr, format+"\n", args...)
 }
 
 func (w *Writer) Errorf(format string, args ...any) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	fmt.Fprintf(w.stderr, "[-] "+format+"\n", args...)
 }
 
 func (w *Writer) WriteResults(values []string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	for _, v := range values {
 		if v == "" {
 			continue
@@ -66,6 +74,8 @@ func (w *Writer) WriteResults(values []string) error {
 }
 
 func (w *Writer) BlankLine() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if _, err := fmt.Fprintln(w.stdout); err != nil {
 		return fmt.Errorf("failed writing results to stdout: %w", err)
 	}
@@ -78,6 +88,8 @@ func (w *Writer) BlankLine() error {
 }
 
 func (w *Writer) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if w.buf != nil {
 		if err := w.buf.Flush(); err != nil {
 			if w.file != nil {

@@ -18,8 +18,16 @@ const (
 	maxBodyBytes   = 32 * 1024 * 1024
 )
 
+type KeyErrorKind int
+
+const (
+	KeyRejected KeyErrorKind = iota
+	KeyQuota
+)
+
 type KeyError struct {
 	Reason string
+	Kind   KeyErrorKind
 }
 
 func (e KeyError) Error() string {
@@ -29,6 +37,11 @@ func (e KeyError) Error() string {
 func IsKeyError(err error) bool {
 	var ke KeyError
 	return errors.As(err, &ke)
+}
+
+func IsQuotaError(err error) bool {
+	var ke KeyError
+	return errors.As(err, &ke) && ke.Kind == KeyQuota
 }
 
 type Client struct {
@@ -67,7 +80,7 @@ func (c *Client) Fetch(ctx context.Context, domain, apiKey string) ([]byte, erro
 		return nil, fmt.Errorf("domain cannot be empty")
 	}
 	if strings.TrimSpace(apiKey) == "" {
-		return nil, KeyError{Reason: "API key is missing"}
+		return nil, KeyError{Reason: "API key is missing", Kind: KeyRejected}
 	}
 
 	reqURL, err := url.Parse(c.baseURL)
@@ -120,11 +133,11 @@ func classifyHTTP(status int) error {
 	case status == http.StatusOK:
 		return nil
 	case status == http.StatusNoContent:
-		return KeyError{Reason: "API rate limit or quota exceeded"}
+		return KeyError{Reason: "API rate limit or quota exceeded", Kind: KeyQuota}
 	case status == http.StatusUnauthorized, status == http.StatusForbidden:
-		return KeyError{Reason: "API key was rejected"}
+		return KeyError{Reason: "API key was rejected", Kind: KeyRejected}
 	case status == http.StatusTooManyRequests:
-		return KeyError{Reason: "API rate limit or quota exceeded"}
+		return KeyError{Reason: "API rate limit or quota exceeded", Kind: KeyQuota}
 	case status == http.StatusBadRequest:
 		return fmt.Errorf("VirusTotal rejected the request (HTTP %d)", status)
 	case status == http.StatusNotFound:
@@ -164,26 +177,29 @@ func classifyAPI(body []byte) error {
 		return nil
 	case -1:
 		if looksLikeKeyIssue(msg) {
-			return KeyError{Reason: "API key was rejected"}
+			return KeyError{Reason: "API key was rejected", Kind: KeyRejected}
 		}
 		if looksLikeQuota(msg) {
-			return KeyError{Reason: "API rate limit or quota exceeded"}
+			return KeyError{Reason: "API rate limit or quota exceeded", Kind: KeyQuota}
 		}
 		if msg != "" {
 			return fmt.Errorf("VirusTotal error: %s", env.VerboseMsg)
 		}
 		return fmt.Errorf("VirusTotal returned an error")
 	case -2:
-		if looksLikeQuota(msg) || looksLikeKeyIssue(msg) {
-			return KeyError{Reason: "API rate limit or quota exceeded"}
+		if looksLikeQuota(msg) {
+			return KeyError{Reason: "API rate limit or quota exceeded", Kind: KeyQuota}
+		}
+		if looksLikeKeyIssue(msg) {
+			return KeyError{Reason: "API key was rejected", Kind: KeyRejected}
 		}
 		return nil
 	default:
 		if looksLikeKeyIssue(msg) {
-			return KeyError{Reason: "API key was rejected"}
+			return KeyError{Reason: "API key was rejected", Kind: KeyRejected}
 		}
 		if looksLikeQuota(msg) {
-			return KeyError{Reason: "API rate limit or quota exceeded"}
+			return KeyError{Reason: "API rate limit or quota exceeded", Kind: KeyQuota}
 		}
 		return nil
 	}

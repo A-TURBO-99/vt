@@ -8,17 +8,32 @@ import (
 	"strings"
 )
 
+const MaxAPIKeys = 5
+
 type Config struct {
 	APIKey1 string `json:"api_key_1"`
 	APIKey2 string `json:"api_key_2"`
+	APIKey3 string `json:"api_key_3"`
+	APIKey4 string `json:"api_key_4"`
+	APIKey5 string `json:"api_key_5"`
 }
 
-func (c Config) Primary() string {
-	return normalizeKey(c.APIKey1)
-}
-
-func (c Config) Fallback() string {
-	return normalizeKey(c.APIKey2)
+func (c Config) Keys() []string {
+	raw := []string{c.APIKey1, c.APIKey2, c.APIKey3, c.APIKey4, c.APIKey5}
+	seen := make(map[string]struct{}, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, key := range raw {
+		key = normalizeKey(key)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, key)
+	}
+	return out
 }
 
 func Load(explicitPath string) (Config, string, error) {
@@ -37,8 +52,8 @@ func Load(explicitPath string) (Config, string, error) {
 		return Config{}, "", fmt.Errorf("invalid configuration file %s: %w", path, err)
 	}
 
-	if cfg.Primary() == "" {
-		return Config{}, "", fmt.Errorf("missing primary API key in %s (set api_key_1)", path)
+	if len(cfg.Keys()) == 0 {
+		return Config{}, "", fmt.Errorf("missing API key in %s (set api_key_1)", path)
 	}
 
 	return cfg, path, nil

@@ -49,6 +49,9 @@ func TestFetchInvalidKey(t *testing.T) {
 	if !IsKeyError(err) {
 		t.Fatalf("err=%v", err)
 	}
+	if IsQuotaError(err) {
+		t.Fatalf("rejected key should not be quota: %v", err)
+	}
 }
 
 func TestFetchRateLimit(t *testing.T) {
@@ -64,6 +67,9 @@ func TestFetchRateLimit(t *testing.T) {
 	if !IsKeyError(err) {
 		t.Fatalf("err=%v", err)
 	}
+	if !IsQuotaError(err) {
+		t.Fatalf("expected quota error, got %v", err)
+	}
 }
 
 func TestFetchQuotaMessage(t *testing.T) {
@@ -78,6 +84,9 @@ func TestFetchQuotaMessage(t *testing.T) {
 	_, err := c.Fetch(context.Background(), "example.com", "k1")
 	if !IsKeyError(err) {
 		t.Fatalf("err=%v", err)
+	}
+	if !IsQuotaError(err) {
+		t.Fatalf("expected quota error, got %v", err)
 	}
 }
 
@@ -121,6 +130,9 @@ func TestFetchHTTP204(t *testing.T) {
 	_, err := c.Fetch(context.Background(), "example.com", "k1")
 	if !IsKeyError(err) {
 		t.Fatalf("err=%v", err)
+	}
+	if !IsQuotaError(err) {
+		t.Fatalf("expected quota error, got %v", err)
 	}
 }
 
