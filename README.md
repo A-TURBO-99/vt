@@ -23,16 +23,13 @@ Optional:
 
 ```bash
 go install github.com/A-TURBO-99/vt/cmd/vt@latest
-cp ~/go/bin/vt /usr/local/bin;
+cp ~/go/bin/vt /usr/local/bin
 ```
 
 ## Configuration
 
 API keys are **not** passed on the command line.
-
-```bash
-cp config/config.json.example config/config.json
-```
+Add API Keys in this File --> config/config.json
 
 `config/config.json`:
 
@@ -65,9 +62,9 @@ Flags:
 |------|-------------|
 | `-d` | Single domain or subdomain |
 | `-l` | File with one domain per line |
-| `-u` | Extract URLs |
-| `-s` | Extract subdomains |
-| `-a` | Extract URLs and subdomains |
+| `-u` | 'URLs' Extract URLs |
+| `-s` | 'subdomains' Extract subdomains |
+| `-a` | 'all' Extract URLs and subdomains |
 | `-o` | Save results to a file |
 | `-t` | Number of threads (default `1`) |
 | `-c` | Path to `config.json` (optional) |
@@ -77,35 +74,23 @@ Use exactly one of `-d` or `-l`, and exactly one of `-u`, `-s`, or `-a`.
 
 ## Examples
 
-Single domain, URLs:
+Single domain, URLs or Subdomains or All:
 
 ```bash
 vt -d example.com -u
-```
-
-Single domain, subdomains:
-
-```bash
 vt -d example.com -s
-```
-
-Single domain, everything:
-
-```bash
 vt -d example.com -a
 ```
 
-Input file, URLs:
+
+Input file, URLs or Subdomains or All:
 
 ```bash
 vt -l domains.txt -u
-```
-
-Input file, subdomains:
-
-```bash
 vt -l domains.txt -s
+vt -l domains.txt -a
 ```
+
 
 Save URLs:
 
@@ -113,23 +98,8 @@ Save URLs:
 vt -d example.com -u -o urls.txt
 ```
 
-Save subdomains:
 
-```bash
-vt -d example.com -s -o subdomains.txt
-```
 
-Pipeline:
-
-```bash
-vt -d example.com -u | sort -u
-```
-
-Input file with pipeline:
-
-```bash
-vt -l domains.txt -s | sort -u
-```
 
 Multiple threads:
 
@@ -139,62 +109,6 @@ vt -l domains.txt -u -t 5
 
 Default is **1 thread** and **1 request per second**. Use `-t` to run more workers in parallel.
 
-## Output
-
-Status messages (banner, `[+] Processing...`, `[+] Found...`, errors) go to **stderr**.
-
-Extracted results go to **stdout**, one per line, with no prefixes. That keeps pipelines clean:
-
-```bash
-vt -d example.com -u | sort -u
-```
-
-Example (`-u`):
-
-```text
-[+] Processing: example.com
-[+] Found 25 URLs
-
-https://example.com/
-https://example.com/blog/
-https://example.com/api/
-```
-
-Example (`-s`):
-
-```text
-[+] Processing: example.com
-[+] Found 12 Subdomains
-
-api.example.com
-app.example.com
-blog.example.com
-```
-
-Example (`-a`):
-
-```text
-[+] Processing: example.com
-[+] Found 25 URLs
-[+] Found 12 Subdomains
-
-https://example.com/
-https://example.com/blog/
-
-api.example.com
-app.example.com
-```
-
-## Extraction
-
-URLs are taken from both VirusTotal fields:
-
-- `detected_urls[].url`
-- `undetected_urls[][0]` (first element of each inner array)
-
-Subdomains are taken from `subdomains[]`.
-
-Missing fields are treated as empty. Duplicates are removed while preserving first-seen order, including across multiple input targets.
 
 ## Input files
 
@@ -217,10 +131,4 @@ internal/output/     stdout / stderr / -o
 internal/unique/     order-preserving dedupe
 internal/banner/     startup banner
 config/              API key configuration
-```
-
-## Tests
-
-```bash
-go test ./...
 ```
