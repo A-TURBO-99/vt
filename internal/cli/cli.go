@@ -26,11 +26,13 @@ const (
 
 Usage:
   vt -d <domain>  -u|-s|-a  [-o file] [-t n] [-dl seconds]
+  vt -ip <ip>     -u|-s|-a  [-o file] [-t n] [-dl seconds]
   vt -l <file>    -u|-s|-a  [-o file] [-t n] [-dl seconds]
 
 Flags:
   -d     Single domain or subdomain
-  -l     File with one domain per line
+  -ip    Single IPv4 address
+  -l     File with one domain or IP per line
   -u     Extract URLs
   -s     Extract subdomains
   -a     Extract URLs and subdomains
@@ -44,6 +46,9 @@ Examples:
   vt -d example.com -u
   vt -d example.com -s
   vt -d example.com -a
+  vt -ip 8.8.8.8 -u
+  vt -ip 8.8.8.8 -s
+  vt -ip 8.8.8.8 -a
   vt -l domains.txt -u
   vt -l domains.txt -u -t 5
   vt -l domains.txt -u -t 5 -dl 0.5
@@ -54,6 +59,7 @@ Examples:
 
 type Options struct {
 	Domain   string
+	IP       string
 	ListFile string
 	URLs     bool
 	Subs     bool
@@ -72,6 +78,7 @@ func Parse(args []string) (Options, error) {
 
 	var opt Options
 	fs.StringVar(&opt.Domain, "d", "", "single domain")
+	fs.StringVar(&opt.IP, "ip", "", "single IPv4 address")
 	fs.StringVar(&opt.ListFile, "l", "", "input file")
 	fs.BoolVar(&opt.URLs, "u", false, "extract URLs")
 	fs.BoolVar(&opt.Subs, "s", false, "extract subdomains")
@@ -145,7 +152,7 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		return 2
 	}
 
-	targets, err := input.LoadTargets(opt.Domain, opt.ListFile)
+	jobs, err := loadJobs(opt)
 	if err != nil {
 		fmt.Fprintf(a.Stderr, "[-] %s\n", err.Error())
 		return 2
@@ -184,13 +191,14 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		gap = 0
 	}
 	rotator := newKeyRotator(cfg.Keys(), client, out)
-	slots := startWorkers(ctx, rotator, targets, mode, opt.Threads, newRateLimiter(gap))
+	slots := startWorkers(ctx, rotator, jobs, mode, opt.Threads, newRateLimiter(gap))
 
 	globalURLs := unique.New()
 	globalSubs := unique.New()
 	failures := 0
 
-	for i, domain := range targets {
+	for i, job := range jobs {
+		domain := job.value
 		out.Statusf("[+] Processing: %s", domain)
 
 		var outcome domainOutcome
@@ -247,10 +255,66 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		out.Statusf("[+] Saved results to %s", opt.Output)
 	}
 
-	if failures > 0 && failures == len(targets) {
+	if failures > 0 && failures == len(jobs) {
 		return 1
 	}
 	return 0
+}
+
+func loadJobs(opt Options) ([]jobTarget, error) {
+	selected := 0
+	if opt.Domain != "" {
+		selected++
+	}
+	if opt.IP != "" {
+		selected++
+	}
+	if opt.ListFile != "" {
+		selected++
+	}
+	if selected == 0 {
+		return nil, fmt.Errorf("a target is required: use -d <domain>, -ip <ip>, or -l <file>")
+	}
+	if selected > 1 {
+		return nil, fmt.Errorf("use only one of -d, -ip, or -l")
+	}
+
+	if opt.IP != "" {
+		ip := strings.TrimSpace(opt.IP)
+		if ip == "" {
+			return nil, fmt.Errorf("IP address cannot be empty")
+		}
+		if !input.IsIPv4(ip) {
+			return nil, fmt.Errorf("invalid IPv4 address: %s", ip)
+		}
+		return []jobTarget{{value: ip, isIP: true}}, nil
+	}
+
+	if opt.Domain != "" {
+		targets, err := input.LoadTargets(opt.Domain, "")
+		if err != nil {
+			return nil, err
+		}
+		return toJobs(targets, false), nil
+	}
+
+	targets, err := input.LoadTargets("", opt.ListFile)
+	if err != nil {
+		return nil, err
+	}
+	jobs := make([]jobTarget, len(targets))
+	for i, t := range targets {
+		jobs[i] = jobTarget{value: t, isIP: input.IsIPv4(t)}
+	}
+	return jobs, nil
+}
+
+func toJobs(targets []string, isIP bool) []jobTarget {
+	jobs := make([]jobTarget, len(targets))
+	for i, t := range targets {
+		jobs[i] = jobTarget{value: t, isIP: isIP}
+	}
+	return jobs
 }
 
 func takeNew(set *unique.Set, values []string) []string {

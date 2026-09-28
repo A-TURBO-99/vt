@@ -2,9 +2,9 @@
 
 # vt
 
-VirusTotal domain reconnaissance CLI.
+VirusTotal domain and IP reconnaissance CLI.
 
-`vt` queries the VirusTotal Domain Report API for one or more domains, extracts URLs and/or subdomains, removes duplicates, prints results for pipelines, and can save them to a file.
+`vt` queries the VirusTotal Domain Report and IP Address Report APIs for one or more targets, extracts URLs and/or subdomains, removes duplicates, prints results for pipelines, and can save them to a file.
 
 Author: **A-TURBO-99**
 
@@ -59,6 +59,7 @@ The tool looks for `config/config.json` in the current working directory and nex
 
 ```text
 vt -d <domain>  -u|-s|-a  [-o file] [-t n] [-dl seconds]
+vt -ip <ip>     -u|-s|-a  [-o file] [-t n] [-dl seconds]
 vt -l <file>    -u|-s|-a  [-o file] [-t n] [-dl seconds]
 ```
 
@@ -67,9 +68,10 @@ Flags:
 | Flag | Description |
 |------|-------------|
 | `-d` | "domain" Single domain or subdomain |
-| `-l` | "list" File with one domain per line |
+| `-ip` | "IP" Single IPv4 address |
+| `-l` | "list" File with one domain or IPv4 address per line |
 | `-u` | "URLS" Extract URLs |
-| `-s` | "Subdomains" Extract subdomains |
+| `-s` | "Subdomains" Extract subdomains (or resolved hostnames for IPs) |
 | `-a` | "All" Extract URLs and subdomains |
 | `-o` | Save results to a file |
 | `-t` | Number of threads (default `1`) |
@@ -77,7 +79,7 @@ Flags:
 | `-c` | Path to `config.json` (optional) |
 | `-h` | Show help |
 
-Use exactly one of `-d` or `-l`, and exactly one of `-u`, `-s`, or `-a`.
+Use exactly one of `-d`, `-ip`, or `-l`, and exactly one of `-u`, `-s`, or `-a`.
 
 ## Examples
 
@@ -89,6 +91,18 @@ vt -d example.com -s
 vt -d example.com -a
 ```
 
+Single IP &&  Collect URLs, resolved hostnames, or ALL:
+
+```bash
+vt -ip 8.8.8.8 -u
+vt -ip 8.8.8.8 -s
+vt -ip 8.8.8.8 -a
+```
+
+`-u` extracts URLs from `detected_urls` and `undetected_urls`.
+`-s` extracts hostnames from `resolutions[].hostname`.
+`-a` extracts both.
+
 Input file, URLs:
 
 ```bash
@@ -96,6 +110,17 @@ vt -l domains.txt -u
 vt -l domains.txt -s
 vt -l domains.txt -a
 ```
+
+The file may contain domains, IPv4 addresses, or a mixture of both. Each line is classified independently and sent to the matching VirusTotal endpoint:
+
+```text
+example.com        -> Domain Report API
+8.8.8.8            -> IP Address Report API
+api.example.com    -> Domain Report API
+1.1.1.1            -> IP Address Report API
+```
+
+Empty lines and comments (`#`) are ignored. The same `-u`, `-s`, and `-a` extraction modes apply to both domains and IPs.
 
 Save subdomains:
 

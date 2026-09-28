@@ -243,6 +243,163 @@ func TestGlobalDedupAndOutputFile(t *testing.T) {
 	}
 }
 
+func TestRunExtractsIP(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("ip") != "8.8.8.8" {
+			t.Errorf("ip=%s", r.URL.Query().Get("ip"))
+		}
+		if r.URL.Query().Get("domain") != "" {
+			t.Errorf("unexpected domain query")
+		}
+		io.WriteString(w, `{
+			"response_code": 1,
+			"detected_urls": [{"url": "http://forms.kycaid.com/"}],
+			"undetected_urls": [["http://kycaid.com/", "h", 0, 90, "2023-08-13 00:34:26"]],
+			"resolutions": [
+				{"hostname": "admin.kycaid.com"},
+				{"hostname": "api.kycaid.com"}
+			]
+		}`)
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Client: vtapi.NewWithOptions(srv.URL, srv.Client()),
+	}
+	cfg := writeConfig(t, "k1", "")
+	code := app.Run(context.Background(), []string{"-ip", "8.8.8.8", "-a", "-c", cfg})
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	if stdout.String() != "http://forms.kycaid.com/\nhttp://kycaid.com/\n\nadmin.kycaid.com\napi.kycaid.com\n" {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "[+] Processing: 8.8.8.8") {
+		t.Fatalf("missing status: %s", stderr.String())
+	}
+}
+
+func TestMixedFileRoutesEndpoints(t *testing.T) {
+	var mu sync.Mutex
+	var domains, ips []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		domain := r.URL.Query().Get("domain")
+		ip := r.URL.Query().Get("ip")
+		mu.Lock()
+		if domain != "" {
+			domains = append(domains, domain)
+			io.WriteString(w, `{"response_code":1,"subdomains":["`+domain+`.ok"]}`)
+		} else if ip != "" {
+			ips = append(ips, ip)
+			io.WriteString(w, `{"response_code":1,"resolutions":[{"hostname":"`+ip+`.host"}]}`)
+		} else {
+			http.Error(w, "missing target", http.StatusBadRequest)
+		}
+		mu.Unlock()
+	}))
+	defer srv.Close()
+
+	list := filepath.Join(t.TempDir(), "targets.txt")
+	content := "example.com\n8.8.8.8\napi.example.com\n1.1.1.1\n"
+	if err := os.WriteFile(list, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Client: vtapi.NewWithOptions(srv.URL, srv.Client()),
+	}
+	cfg := writeConfig(t, "k1")
+	code := app.Run(context.Background(), []string{"-l", list, "-s", "-t", "1", "-c", cfg})
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+
+	got := splitLines(stdout.String())
+	want := []string{"example.com.ok", "8.8.8.8.host", "api.example.com.ok", "1.1.1.1.host"}
+	if len(got) != len(want) {
+		t.Fatalf("lines=%v stderr=%s", got, stderr.String())
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("lines=%v", got)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(domains) != 2 || len(ips) != 2 {
+		t.Fatalf("domains=%v ips=%v", domains, ips)
+	}
+}
+
+func TestIPOnlyFile(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("ip") == "" {
+			t.Errorf("expected ip query, got %s", r.URL.RawQuery)
+		}
+		io.WriteString(w, `{"response_code":1,"detected_urls":[{"url":"https://`+r.URL.Query().Get("ip")+`/"}]}`)
+	}))
+	defer srv.Close()
+
+	list := filepath.Join(t.TempDir(), "ips.txt")
+	if err := os.WriteFile(list, []byte("8.8.8.8\n1.1.1.1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Client: vtapi.NewWithOptions(srv.URL, srv.Client()),
+	}
+	cfg := writeConfig(t, "k1")
+	code := app.Run(context.Background(), []string{"-l", list, "-u", "-c", cfg})
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	got := splitLines(stdout.String())
+	if len(got) != 2 || got[0] != "https://8.8.8.8/" || got[1] != "https://1.1.1.1/" {
+		t.Fatalf("lines=%v", got)
+	}
+}
+
+func TestInvalidIP(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+	code := app.Run(context.Background(), []string{"-ip", "not-an-ip", "-u"})
+	if code != 2 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "invalid IPv4 address") {
+		t.Fatalf("stderr=%s", stderr.String())
+	}
+}
+
+func TestConflictingDIP(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+	code := app.Run(context.Background(), []string{"-d", "example.com", "-ip", "8.8.8.8", "-u"})
+	if code != 2 {
+		t.Fatalf("exit=%d", code)
+	}
+}
+
+func TestParseIP(t *testing.T) {
+	opt, err := Parse([]string{"-ip", "8.8.8.8", "-s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opt.IP != "8.8.8.8" || opt.Domain != "" {
+		t.Fatalf("opt=%+v", opt)
+	}
+}
+
 func TestConflictingFlags(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	app := &App{Stdout: &stdout, Stderr: &stderr}

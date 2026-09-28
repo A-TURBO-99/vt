@@ -14,6 +14,7 @@ import (
 
 const (
 	defaultBaseURL = "https://www.virustotal.com/vtapi/v2/domain/report"
+	defaultIPURL   = "https://www.virustotal.com/vtapi/v2/ip-address/report"
 	defaultTimeout = 30 * time.Second
 	maxBodyBytes   = 32 * 1024 * 1024
 )
@@ -47,6 +48,7 @@ func IsQuotaError(err error) bool {
 type Client struct {
 	http    *http.Client
 	baseURL string
+	ipURL   string
 }
 
 func New() *Client {
@@ -69,27 +71,40 @@ func NewWithOptions(baseURL string, httpClient *http.Client) *Client {
 	if strings.TrimSpace(baseURL) == "" {
 		baseURL = defaultBaseURL
 	}
+	ipURL := defaultIPURL
+	if baseURL != defaultBaseURL {
+		ipURL = baseURL
+	}
 	return &Client{
 		http:    httpClient,
 		baseURL: baseURL,
+		ipURL:   ipURL,
 	}
 }
 
 func (c *Client) Fetch(ctx context.Context, domain, apiKey string) ([]byte, error) {
-	if strings.TrimSpace(domain) == "" {
-		return nil, fmt.Errorf("domain cannot be empty")
+	return c.doReport(ctx, c.baseURL, "domain", domain, apiKey, "domain cannot be empty")
+}
+
+func (c *Client) FetchIP(ctx context.Context, ip, apiKey string) ([]byte, error) {
+	return c.doReport(ctx, c.ipURL, "ip", ip, apiKey, "IP address cannot be empty")
+}
+
+func (c *Client) doReport(ctx context.Context, endpoint, queryKey, queryValue, apiKey, emptyMsg string) ([]byte, error) {
+	if strings.TrimSpace(queryValue) == "" {
+		return nil, fmt.Errorf("%s", emptyMsg)
 	}
 	if strings.TrimSpace(apiKey) == "" {
 		return nil, KeyError{Reason: "API key is missing", Kind: KeyRejected}
 	}
 
-	reqURL, err := url.Parse(c.baseURL)
+	reqURL, err := url.Parse(endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("invalid VirusTotal endpoint")
 	}
 	q := reqURL.Query()
 	q.Set("apikey", apiKey)
-	q.Set("domain", domain)
+	q.Set(queryKey, queryValue)
 	reqURL.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL.String(), nil)
@@ -102,19 +117,19 @@ func (c *Client) Fetch(ctx context.Context, domain, apiKey string) ([]byte, erro
 	resp, err := c.http.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
-			return nil, fmt.Errorf("request timed out while querying VirusTotal for %s", domain)
+			return nil, fmt.Errorf("request timed out while querying VirusTotal for %s", queryValue)
 		}
-		return nil, fmt.Errorf("network error while querying VirusTotal for %s: %w", domain, sanitize(err))
+		return nil, fmt.Errorf("network error while querying VirusTotal for %s: %w", queryValue, sanitize(err))
 	}
 	defer resp.Body.Close()
 
 	limited := io.LimitReader(resp.Body, maxBodyBytes+1)
 	body, err := io.ReadAll(limited)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read VirusTotal response for %s: %w", domain, err)
+		return nil, fmt.Errorf("failed to read VirusTotal response for %s: %w", queryValue, err)
 	}
 	if len(body) > maxBodyBytes {
-		return nil, fmt.Errorf("VirusTotal response for %s is too large", domain)
+		return nil, fmt.Errorf("VirusTotal response for %s is too large", queryValue)
 	}
 
 	if err := classifyHTTP(resp.StatusCode); err != nil {

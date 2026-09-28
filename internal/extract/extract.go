@@ -52,6 +52,11 @@ type reportRaw struct {
 	DetectedURLs   json.RawMessage `json:"detected_urls"`
 	UndetectedURLs json.RawMessage `json:"undetected_urls"`
 	Subdomains     json.RawMessage `json:"subdomains"`
+	Resolutions    json.RawMessage `json:"resolutions"`
+}
+
+type resolution struct {
+	Hostname string `json:"hostname"`
 }
 
 type detectedURL struct {
@@ -130,6 +135,14 @@ func extractSubdomains(raw reportRaw) []string {
 	}
 	for _, item := range subs {
 		set.Add(strings.TrimSpace(item))
+	}
+
+	var resolutions []resolution
+	if len(raw.Resolutions) > 0 && string(raw.Resolutions) != "null" {
+		_ = json.Unmarshal(raw.Resolutions, &resolutions)
+	}
+	for _, item := range resolutions {
+		set.Add(strings.TrimSpace(item.Hostname))
 	}
 	return set.Values()
 }

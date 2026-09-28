@@ -7,13 +7,18 @@ import (
 	"github.com/A-TURBO-99/vt/internal/extract"
 )
 
+type jobTarget struct {
+	value string
+	isIP  bool
+}
+
 type domainOutcome struct {
 	domain string
 	res    extract.Result
 	err    error
 }
 
-func startWorkers(ctx context.Context, rotator *keyRotator, targets []string, mode extract.Mode, threads int, limiter *rateLimiter) []<-chan domainOutcome {
+func startWorkers(ctx context.Context, rotator *keyRotator, targets []jobTarget, mode extract.Mode, threads int, limiter *rateLimiter) []<-chan domainOutcome {
 	n := len(targets)
 	slots := make([]chan domainOutcome, n)
 	out := make([]<-chan domainOutcome, n)
@@ -40,7 +45,8 @@ func startWorkers(ctx context.Context, rotator *keyRotator, targets []string, mo
 		go func() {
 			defer wg.Done()
 			for idx := range jobs {
-				domain := targets[idx]
+				target := targets[idx]
+				domain := target.value
 				if err := ctx.Err(); err != nil {
 					slots[idx] <- domainOutcome{domain: domain, err: err}
 					continue
@@ -50,7 +56,15 @@ func startWorkers(ctx context.Context, rotator *keyRotator, targets []string, mo
 					continue
 				}
 
-				body, err := rotator.Fetch(ctx, domain)
+				var (
+					body []byte
+					err  error
+				)
+				if target.isIP {
+					body, err = rotator.FetchIP(ctx, domain)
+				} else {
+					body, err = rotator.Fetch(ctx, domain)
+				}
 				if err != nil {
 					slots[idx] <- domainOutcome{domain: domain, err: err}
 					continue
@@ -77,7 +91,7 @@ func startWorkers(ctx context.Context, rotator *keyRotator, targets []string, mo
 		wg.Wait()
 		for i := range slots {
 			select {
-			case slots[i] <- domainOutcome{domain: targets[i], err: ctx.Err()}:
+			case slots[i] <- domainOutcome{domain: targets[i].value, err: ctx.Err()}:
 			default:
 			}
 		}

@@ -35,6 +35,44 @@ func TestFetchSuccess(t *testing.T) {
 	}
 }
 
+func TestFetchIPSuccess(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("apikey") != "k1" {
+			t.Errorf("apikey=%s", r.URL.Query().Get("apikey"))
+		}
+		if r.URL.Query().Get("ip") != "8.8.8.8" {
+			t.Errorf("ip=%s", r.URL.Query().Get("ip"))
+		}
+		if r.URL.Query().Get("domain") != "" {
+			t.Errorf("domain should be empty for IP requests")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"response_code":1,"resolutions":[{"hostname":"dns.google"}]}`)
+	}))
+	defer srv.Close()
+
+	c := NewWithOptions(srv.URL, srv.Client())
+	body, err := c.FetchIP(context.Background(), "8.8.8.8", "k1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "dns.google") {
+		t.Fatalf("body=%s", body)
+	}
+}
+
+func TestFetchIPEmpty(t *testing.T) {
+	t.Parallel()
+
+	c := New()
+	_, err := c.FetchIP(context.Background(), "  ", "k1")
+	if err == nil {
+		t.Fatal("expected empty IP error")
+	}
+}
+
 func TestFetchInvalidKey(t *testing.T) {
 	t.Parallel()
 

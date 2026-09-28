@@ -3,11 +3,21 @@ package input
 import (
 	"bufio"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 
 	"github.com/A-TURBO-99/vt/internal/unique"
 )
+
+func IsIPv4(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	ip := net.ParseIP(value)
+	return ip != nil && ip.To4() != nil && strings.Count(value, ".") == 3 && !strings.Contains(value, ":")
+}
 
 func LoadTargets(domain, listFile string) ([]string, error) {
 	if domain != "" && listFile != "" {

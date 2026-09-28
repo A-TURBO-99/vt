@@ -26,13 +26,29 @@ func newKeyRotator(keys []string, client *vtapi.Client, out *output.Writer) *key
 }
 
 func (r *keyRotator) Fetch(ctx context.Context, domain string) ([]byte, error) {
+	return r.fetch(ctx, domain, false)
+}
+
+func (r *keyRotator) FetchIP(ctx context.Context, ip string) ([]byte, error) {
+	return r.fetch(ctx, ip, true)
+}
+
+func (r *keyRotator) fetch(ctx context.Context, target string, isIP bool) ([]byte, error) {
 	for {
 		key, idx, ok := r.currentKey()
 		if !ok {
 			return nil, fmt.Errorf("all API keys are exhausted")
 		}
 
-		body, err := r.client.Fetch(ctx, domain, key)
+		var (
+			body []byte
+			err  error
+		)
+		if isIP {
+			body, err = r.client.FetchIP(ctx, target, key)
+		} else {
+			body, err = r.client.Fetch(ctx, target, key)
+		}
 		if err == nil {
 			return body, nil
 		}

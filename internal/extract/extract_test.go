@@ -139,6 +139,66 @@ func TestFromJSONUndetectedMalformedRows(t *testing.T) {
 	}
 }
 
+func TestFromJSONIPResolutions(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{
+		"as_owner": "Google LLC",
+		"asn": 15169,
+		"country": "BE",
+		"detected_urls": [
+			{"positives": 1, "scan_date": "2021-11-25 07:59:25", "total": 93, "url": "http://forms.kycaid.com/"}
+		],
+		"resolutions": [
+			{"hostname": "admin.kycaid.com", "last_resolved": "2019-09-21 04:56:13"},
+			{"hostname": "api.kycaid.com", "last_resolved": "2019-09-21 04:56:13"},
+			{"hostname": "admin.kycaid.com", "last_resolved": "2018-01-01 00:00:00"}
+		],
+		"undetected_urls": [
+			["http://kycaid.com/", "hash", 0, 90, "2023-08-13 00:34:26"]
+		]
+	}`)
+
+	res, err := FromJSON(body, ModeAll)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantURLs := []string{"http://forms.kycaid.com/", "http://kycaid.com/"}
+	if len(res.URLs) != len(wantURLs) {
+		t.Fatalf("urls=%v", res.URLs)
+	}
+	for i, u := range wantURLs {
+		if res.URLs[i] != u {
+			t.Fatalf("url[%d]=%q want %q", i, res.URLs[i], u)
+		}
+	}
+	wantHosts := []string{"admin.kycaid.com", "api.kycaid.com"}
+	if len(res.Subdomains) != len(wantHosts) {
+		t.Fatalf("subs=%v", res.Subdomains)
+	}
+	for i, s := range wantHosts {
+		if res.Subdomains[i] != s {
+			t.Fatalf("sub[%d]=%q want %q", i, res.Subdomains[i], s)
+		}
+	}
+
+	urlsOnly, err := FromJSON(body, ModeURLs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(urlsOnly.URLs) != 2 || len(urlsOnly.Subdomains) != 0 {
+		t.Fatalf("urls mode: %+v", urlsOnly)
+	}
+
+	subsOnly, err := FromJSON(body, ModeSubdomains)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(subsOnly.URLs) != 0 || len(subsOnly.Subdomains) != 2 {
+		t.Fatalf("subs mode: %+v", subsOnly)
+	}
+}
+
 func TestModeFilters(t *testing.T) {
 	t.Parallel()
 
