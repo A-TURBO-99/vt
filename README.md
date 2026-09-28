@@ -1,4 +1,4 @@
-<img width="410" height="407" alt="EaseUS_2026_09_23_04_03_11" align="middle" src="https://github.com/user-attachments/assets/56651bbd-41cb-4396-991a-199d15ce90bd" />
+<img width="349" height="365" alt="EaseUS_2026_09_28_14_30_17" src="https://github.com/user-attachments/assets/3a7b9f3a-b078-40c0-8244-c6213bc9f685" />
 
 # vt
 
