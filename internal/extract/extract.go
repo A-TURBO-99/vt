@@ -2,6 +2,7 @@ package extract
 
 import (
 	"encoding/json"
+	"net"
 	"strings"
 
 	"github.com/A-TURBO-99/vt/internal/unique"
@@ -13,15 +14,16 @@ const (
 	ModeNone Mode = iota
 	ModeURLs
 	ModeSubdomains
-	ModeAll
+	ModeIPs
 )
 
 type Result struct {
 	URLs       []string
 	Subdomains []string
+	IPs        []string
 }
 
-func ParseMode(urls, subdomains, all bool) (Mode, error) {
+func ParseMode(urls, subdomains, ips bool) (Mode, error) {
 	selected := 0
 	if urls {
 		selected++
@@ -29,14 +31,14 @@ func ParseMode(urls, subdomains, all bool) (Mode, error) {
 	if subdomains {
 		selected++
 	}
-	if all {
+	if ips {
 		selected++
 	}
 	if selected == 0 {
-		return ModeNone, parseError("extraction mode required: use -u, -s, or -a")
+		return ModeNone, parseError("extraction mode required: use -u, -s, or -ips")
 	}
 	if selected > 1 {
-		return ModeNone, parseError("conflicting extraction modes: use only one of -u, -s, or -a")
+		return ModeNone, parseError("conflicting extraction modes: use only one of -u, -s, or -ips")
 	}
 	switch {
 	case urls:
@@ -44,7 +46,7 @@ func ParseMode(urls, subdomains, all bool) (Mode, error) {
 	case subdomains:
 		return ModeSubdomains, nil
 	default:
-		return ModeAll, nil
+		return ModeIPs, nil
 	}
 }
 
@@ -56,7 +58,8 @@ type reportRaw struct {
 }
 
 type resolution struct {
-	Hostname string `json:"hostname"`
+	Hostname  string `json:"hostname"`
+	IPAddress string `json:"ip_address"`
 }
 
 type detectedURL struct {
@@ -96,11 +99,13 @@ func FromJSON(body []byte, mode Mode) (Result, error) {
 	}
 
 	var out Result
-	if mode == ModeURLs || mode == ModeAll {
+	switch mode {
+	case ModeURLs:
 		out.URLs = extractURLs(raw)
-	}
-	if mode == ModeSubdomains || mode == ModeAll {
+	case ModeSubdomains:
 		out.Subdomains = extractSubdomains(raw)
+	case ModeIPs:
+		out.IPs = extractIPs(raw)
 	}
 	return out, nil
 }
@@ -143,6 +148,22 @@ func extractSubdomains(raw reportRaw) []string {
 	}
 	for _, item := range resolutions {
 		set.Add(strings.TrimSpace(item.Hostname))
+	}
+	return set.Values()
+}
+
+func extractIPs(raw reportRaw) []string {
+	set := unique.New()
+	var resolutions []resolution
+	if len(raw.Resolutions) > 0 && string(raw.Resolutions) != "null" {
+		_ = json.Unmarshal(raw.Resolutions, &resolutions)
+	}
+	for _, item := range resolutions {
+		ip := strings.TrimSpace(item.IPAddress)
+		if ip == "" || net.ParseIP(ip) == nil {
+			continue
+		}
+		set.Add(ip)
 	}
 	return set.Values()
 }

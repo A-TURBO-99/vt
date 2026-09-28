@@ -1,10 +1,10 @@
-<img width="349" height="365" alt="EaseUS_2026_09_28_14_30_17" src="https://github.com/user-attachments/assets/3a7b9f3a-b078-40c0-8244-c6213bc9f685" />
+<img width="410" height="407" alt="EaseUS_2026_09_23_04_03_11" align="middle" src="https://github.com/user-attachments/assets/56651bbd-41cb-4396-991a-199d15ce90bd" />
 
 # vt
 
 VirusTotal domain and IP reconnaissance CLI.
 
-`vt` queries the VirusTotal Domain Report and IP Address Report APIs for one or more targets, extracts URLs and/or subdomains, removes duplicates, prints results for pipelines, and can save them to a file.
+`vt` queries the VirusTotal Domain Report and IP Address Report APIs for one or more targets, extracts URLs, subdomains, or IP addresses, removes duplicates, prints results for pipelines, and can save them to a file.
 
 Author: **A-TURBO-99**
 
@@ -58,9 +58,9 @@ The tool looks for `config/config.json` in the current working directory and nex
 ## Usage
 
 ```text
-vt -d <domain>  -u|-s|-a  [-o file] [-t n] [-dl seconds]
-vt -ip <ip>     -u|-s|-a  [-o file] [-t n] [-dl seconds]
-vt -l <file>    -u|-s|-a  [-o file] [-t n] [-dl seconds]
+vt -d <domain>  -u|-s|-ips  [-o file] [-t n] [-dl seconds] [-tm seconds]
+vt -ip <ip>     -u|-s|-ips  [-o file] [-t n] [-dl seconds] [-tm seconds]
+vt -l <file>    -u|-s|-ips  [-o file] [-t n] [-dl seconds] [-tm seconds]
 ```
 
 Flags:
@@ -72,43 +72,44 @@ Flags:
 | `-l` | "list" File with one domain or IPv4 address per line |
 | `-u` | "URLS" Extract URLs |
 | `-s` | "Subdomains" Extract subdomains (or resolved hostnames for IPs) |
-| `-a` | "All" Extract URLs and subdomains |
+| `-ips` | Extract IP addresses |
 | `-o` | Save results to a file |
 | `-t` | Number of threads (default `1`) |
 | `-dl` | Delay in seconds between requests (default `1`, `0` disables) |
+| `-tm` | HTTP request timeout in seconds (default `6`) |
 | `-c` | Path to `config.json` (optional) |
 | `-h` | Show help |
 
-Use exactly one of `-d`, `-ip`, or `-l`, and exactly one of `-u`, `-s`, or `-a`.
+Use exactly one of `-d`, `-ip`, or `-l`, and exactly one of `-u`, `-s`, or `-ips`.
 
 ## Examples
 
-Single domain &&  Collect URLs or Subdomains or ALL:
+Single domain &&  Collect URLs, Subdomains, or IPs:
 
 ```bash
 vt -d example.com -u
 vt -d example.com -s
-vt -d example.com -a
+vt -d example.com -ips
 ```
 
-Single IP &&  Collect URLs, resolved hostnames, or ALL:
+Single IP &&  Collect URLs, resolved hostnames, or IPs:
 
 ```bash
 vt -ip 8.8.8.8 -u
 vt -ip 8.8.8.8 -s
-vt -ip 8.8.8.8 -a
+vt -ip 8.8.8.8 -ips
 ```
 
 `-u` extracts URLs from `detected_urls` and `undetected_urls`.
 `-s` extracts hostnames from `resolutions[].hostname`.
-`-a` extracts both.
+`-ips` extracts IP addresses from `resolutions[].ip_address`.
 
-Input file, URLs:
+Input file:
 
 ```bash
 vt -l domains.txt -u
 vt -l domains.txt -s
-vt -l domains.txt -a
+vt -l domains.txt -ips
 ```
 
 The file may contain domains, IPv4 addresses, or a mixture of both. Each line is classified independently and sent to the matching VirusTotal endpoint:
@@ -120,7 +121,7 @@ api.example.com    -> Domain Report API
 1.1.1.1            -> IP Address Report API
 ```
 
-Empty lines and comments (`#`) are ignored. The same `-u`, `-s`, and `-a` extraction modes apply to both domains and IPs.
+Empty lines and comments (`#`) are ignored. The same `-u`, `-s`, and `-ips` extraction modes apply to both domains and IPs.
 
 Save subdomains:
 
@@ -146,6 +147,16 @@ Fractional delays are allowed:
 vt -l domains.txt -u -t 5 -dl 0.5
 ```
 
-Defaults are **1 thread** and a **1 second delay** between requests. Use `-t` to run more workers in parallel and `-dl` to change the spacing (`-dl 0` disables the delay).
+HTTP request timeout:
+
+```bash
+vt -d example.com -u -tm 10
+vt -ip 8.8.8.8 -s -tm 3
+vt -l targets.txt -u -dl 2 -tm 6
+```
+
+`-dl` is the delay between requests. `-tm` is how long each HTTP request may wait before timing out.
+
+Defaults are **1 thread**, a **1 second delay** between requests, and a **6 second** HTTP timeout. Use `-t` to run more workers in parallel, `-dl` to change the spacing (`-dl 0` disables the delay), and `-tm` to change the request timeout.
 
 

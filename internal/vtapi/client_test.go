@@ -141,6 +141,30 @@ func TestFetchDoesNotLeakKey(t *testing.T) {
 	}
 }
 
+func TestSetTimeout(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		time.Sleep(400 * time.Millisecond)
+		io.WriteString(w, `{"response_code":1}`)
+	}))
+	defer srv.Close()
+
+	c := NewWithOptions(srv.URL, srv.Client())
+	c.SetTimeout(50 * time.Millisecond)
+	start := time.Now()
+	_, err := c.Fetch(context.Background(), "example.com", "k1")
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected timeout")
+	}
+	if elapsed > 300*time.Millisecond {
+		t.Fatalf("elapsed=%s", elapsed)
+	}
+}
+
 func TestFetchInvalidJSON(t *testing.T) {
 	t.Parallel()
 

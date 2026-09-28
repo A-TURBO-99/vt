@@ -1,7 +1,7 @@
 {
-  "api_key_1": "8ff0398ae2ce3c43e5db6fe63ba409245ba967035d7cbda856e51069dee82316",
-  "api_key_2": "cc3dcede7a48a8a08317089968ba2f07bf496a619934ae10a619d83122770f34",
-  "api_key_3": "d067cfbca7a93bb3742209e5649cc3b441300436ed84622bdd13121bea5be852",
-  "api_key_4": "7801a7c0888e4788870e66ae66b0e4547beb46e27c1a0f1a83b8ded2596d1ae8",
-  "api_key_5": "11801d9b0d3279bcef931bee28583c9c624851f4a61d1d972e85e80486586ca9"
+  "api_key_1": "YOUR_API_KEY_1",
+  "api_key_2": "YOUR_API_KEY_2",
+  "api_key_3": "YOUR_API_KEY_3",
+  "api_key_4": "YOUR_API_KEY_4",
+  "api_key_5": "YOUR_API_KEY_5"
 }

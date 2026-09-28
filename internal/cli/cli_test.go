@@ -270,11 +270,11 @@ func TestRunExtractsIP(t *testing.T) {
 		Client: vtapi.NewWithOptions(srv.URL, srv.Client()),
 	}
 	cfg := writeConfig(t, "k1", "")
-	code := app.Run(context.Background(), []string{"-ip", "8.8.8.8", "-a", "-c", cfg})
+	code := app.Run(context.Background(), []string{"-ip", "8.8.8.8", "-s", "-c", cfg})
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
 	}
-	if stdout.String() != "http://forms.kycaid.com/\nhttp://kycaid.com/\n\nadmin.kycaid.com\napi.kycaid.com\n" {
+	if stdout.String() != "admin.kycaid.com\napi.kycaid.com\n" {
 		t.Fatalf("stdout=%q", stdout.String())
 	}
 	if !strings.Contains(stderr.String(), "[+] Processing: 8.8.8.8") {
@@ -400,6 +400,124 @@ func TestParseIP(t *testing.T) {
 	}
 }
 
+func TestRunExtractsIPsFromDomain(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("domain") != "example.com" {
+			t.Errorf("domain=%s", r.URL.Query().Get("domain"))
+		}
+		io.WriteString(w, `{
+			"response_code": 1,
+			"resolutions": [
+				{"hostname": "api.example.com", "ip_address": "1.2.3.4"},
+				{"hostname": "www.example.com", "ip_address": "1.2.3.4"},
+				{"hostname": "mail.example.com", "ip_address": "5.6.7.8"},
+				{"hostname": "empty.example.com", "ip_address": ""}
+			]
+		}`)
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Client: vtapi.NewWithOptions(srv.URL, srv.Client()),
+	}
+	cfg := writeConfig(t, "k1")
+	outFile := filepath.Join(t.TempDir(), "ips.txt")
+	code := app.Run(context.Background(), []string{"-d", "example.com", "-ips", "-o", outFile, "-c", cfg})
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	if stdout.String() != "1.2.3.4\n5.6.7.8\n" {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "[+] Found 2 IPs") {
+		t.Fatalf("missing status: %s", stderr.String())
+	}
+	saved, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(saved) != stdout.String() {
+		t.Fatalf("file=%q stdout=%q", saved, stdout.String())
+	}
+}
+
+func TestRunExtractsIPsFromIPInput(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("ip") != "8.8.8.8" {
+			t.Errorf("ip=%s", r.URL.Query().Get("ip"))
+		}
+		io.WriteString(w, `{
+			"response_code": 1,
+			"resolutions": [
+				{"hostname": "dns.google", "ip_address": "8.8.8.8"},
+				{"hostname": "dns.google", "ip_address": "8.8.4.4"}
+			]
+		}`)
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Client: vtapi.NewWithOptions(srv.URL, srv.Client()),
+	}
+	cfg := writeConfig(t, "k1")
+	code := app.Run(context.Background(), []string{"-ip", "8.8.8.8", "-ips", "-c", cfg})
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	if stdout.String() != "8.8.8.8\n8.8.4.4\n" {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+}
+
+func TestMixedFileExtractsIPs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		domain := r.URL.Query().Get("domain")
+		ip := r.URL.Query().Get("ip")
+		switch {
+		case domain == "example.com":
+			io.WriteString(w, `{"response_code":1,"resolutions":[{"hostname":"a.example.com","ip_address":"1.1.1.1"},{"hostname":"b.example.com","ip_address":"2.2.2.2"}]}`)
+		case ip == "8.8.8.8":
+			io.WriteString(w, `{"response_code":1,"resolutions":[{"hostname":"dns.google","ip_address":"8.8.8.8"}]}`)
+		default:
+			io.WriteString(w, `{"response_code":1,"resolutions":[]}`)
+		}
+	}))
+	defer srv.Close()
+
+	list := filepath.Join(t.TempDir(), "targets.txt")
+	if err := os.WriteFile(list, []byte("example.com\n8.8.8.8\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Client: vtapi.NewWithOptions(srv.URL, srv.Client()),
+	}
+	cfg := writeConfig(t, "k1")
+	code := app.Run(context.Background(), []string{"-l", list, "-ips", "-t", "1", "-c", cfg})
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	got := splitLines(stdout.String())
+	want := []string{"1.1.1.1", "2.2.2.2", "8.8.8.8"}
+	if len(got) != len(want) {
+		t.Fatalf("lines=%v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("lines=%v", got)
+		}
+	}
+}
+
 func TestConflictingFlags(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	app := &App{Stdout: &stdout, Stderr: &stderr}
@@ -409,6 +527,24 @@ func TestConflictingFlags(t *testing.T) {
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout should be empty")
+	}
+}
+
+func TestConflictingIPSFlags(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+	code := app.Run(context.Background(), []string{"-d", "example.com", "-u", "-ips"})
+	if code != 2 {
+		t.Fatalf("exit=%d", code)
+	}
+}
+
+func TestAllFlagRemoved(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+	code := app.Run(context.Background(), []string{"-d", "example.com", "-a"})
+	if code != 2 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
 	}
 }
 
@@ -579,13 +715,73 @@ func TestHelp(t *testing.T) {
 	}
 }
 
-func TestAllModeBlankLine(t *testing.T) {
+func TestParseTimeout(t *testing.T) {
+	opt, err := Parse([]string{"-d", "example.com", "-u", "-tm", "10"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opt.TimeoutSet || opt.Timeout != 10 {
+		t.Fatalf("timeout=%v set=%v", opt.Timeout, opt.TimeoutSet)
+	}
+
+	def, err := Parse([]string{"-d", "example.com", "-u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def.TimeoutSet {
+		t.Fatal("timeout should not be marked as set")
+	}
+	if def.Timeout != 6 {
+		t.Fatalf("default timeout=%v", def.Timeout)
+	}
+}
+
+func TestInvalidTimeout(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+	code := app.Run(context.Background(), []string{"-d", "example.com", "-u", "-tm", "0"})
+	if code != 2 {
+		t.Fatalf("exit=%d", code)
+	}
+	code = app.Run(context.Background(), []string{"-d", "example.com", "-u", "-tm", "-1"})
+	if code != 2 {
+		t.Fatalf("exit=%d", code)
+	}
+}
+
+func TestTimeoutCancelsSlowRequest(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, `{
-			"response_code": 1,
-			"detected_urls": [{"url": "https://example.com/"}],
-			"subdomains": ["api.example.com"]
-		}`)
+		time.Sleep(400 * time.Millisecond)
+		io.WriteString(w, `{"response_code":1,"detected_urls":[{"url":"https://example.com/"}]}`)
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Stdout:         &stdout,
+		Stderr:         &stderr,
+		Client:         vtapi.NewWithOptions(srv.URL, srv.Client()),
+		DefaultTimeout: 6 * time.Second,
+	}
+	cfg := writeConfig(t, "k1")
+	start := time.Now()
+	code := app.Run(context.Background(), []string{"-d", "example.com", "-u", "-tm", "0.05", "-c", cfg})
+	elapsed := time.Since(start)
+	if code == 0 {
+		t.Fatalf("expected timeout failure, stdout=%q", stdout.String())
+	}
+	if elapsed > 300*time.Millisecond {
+		t.Fatalf("timeout not applied, elapsed=%s", elapsed)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+}
+
+func TestTimeoutAppliesToIPRequests(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(400 * time.Millisecond)
+		io.WriteString(w, `{"response_code":1,"resolutions":[{"hostname":"dns.google"}]}`)
 	}))
 	defer srv.Close()
 
@@ -595,12 +791,67 @@ func TestAllModeBlankLine(t *testing.T) {
 		Stderr: &stderr,
 		Client: vtapi.NewWithOptions(srv.URL, srv.Client()),
 	}
-	cfg := writeConfig(t, "k1", "")
-	code := app.Run(context.Background(), []string{"-d", "example.com", "-a", "-c", cfg})
+	cfg := writeConfig(t, "k1")
+	start := time.Now()
+	code := app.Run(context.Background(), []string{"-ip", "8.8.8.8", "-s", "-tm", "0.05", "-c", cfg})
+	elapsed := time.Since(start)
+	if code == 0 {
+		t.Fatalf("expected timeout failure")
+	}
+	if elapsed > 300*time.Millisecond {
+		t.Fatalf("timeout not applied, elapsed=%s", elapsed)
+	}
+}
+
+func TestTimeoutConcurrentRequests(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(400 * time.Millisecond)
+		io.WriteString(w, `{"response_code":1,"subdomains":["ok"]}`)
+	}))
+	defer srv.Close()
+
+	list := filepath.Join(t.TempDir(), "domains.txt")
+	if err := os.WriteFile(list, []byte("a.com\nb.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Client: vtapi.NewWithOptions(srv.URL, srv.Client()),
+	}
+	cfg := writeConfig(t, "k1")
+	start := time.Now()
+	code := app.Run(context.Background(), []string{"-l", list, "-s", "-t", "2", "-dl", "0", "-tm", "0.05", "-c", cfg})
+	elapsed := time.Since(start)
+	if code == 0 {
+		t.Fatalf("expected timeout failure")
+	}
+	if elapsed > 400*time.Millisecond {
+		t.Fatalf("timeout not applied concurrently, elapsed=%s", elapsed)
+	}
+}
+
+func TestDefaultTimeoutUsedWhenFlagAbsent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"response_code":1,"subdomains":["ok"]}`)
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Stdout:         &stdout,
+		Stderr:         &stderr,
+		Client:         vtapi.NewWithOptions(srv.URL, srv.Client()),
+		DefaultTimeout: 6 * time.Second,
+	}
+	cfg := writeConfig(t, "k1")
+	code := app.Run(context.Background(), []string{"-d", "example.com", "-s", "-c", cfg})
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
 	}
-	if stdout.String() != "https://example.com/\n\napi.example.com\n" {
+	if stdout.String() != "ok\n" {
 		t.Fatalf("stdout=%q", stdout.String())
 	}
 }

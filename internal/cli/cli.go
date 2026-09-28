@@ -22,12 +22,13 @@ import (
 const (
 	defaultThreads    = 1
 	defaultRequestGap = time.Second
+	defaultTimeout    = 6 * time.Second
 	usageText         = `vt — VirusTotal domain reconnaissance
 
 Usage:
-  vt -d <domain>  -u|-s|-a  [-o file] [-t n] [-dl seconds]
-  vt -ip <ip>     -u|-s|-a  [-o file] [-t n] [-dl seconds]
-  vt -l <file>    -u|-s|-a  [-o file] [-t n] [-dl seconds]
+  vt -d <domain>  -u|-s|-ips  [-o file] [-t n] [-dl seconds] [-tm seconds]
+  vt -ip <ip>     -u|-s|-ips  [-o file] [-t n] [-dl seconds] [-tm seconds]
+  vt -l <file>    -u|-s|-ips  [-o file] [-t n] [-dl seconds] [-tm seconds]
 
 Flags:
   -d     Single domain or subdomain
@@ -35,41 +36,45 @@ Flags:
   -l     File with one domain or IP per line
   -u     Extract URLs
   -s     Extract subdomains
-  -a     Extract URLs and subdomains
+  -ips   Extract IP addresses
   -o     Save results to a file
   -t     Number of threads (default 1)
   -dl    Delay in seconds between requests (default 1, 0 disables)
+  -tm    HTTP request timeout in seconds (default 6)
   -c     Path to config.json (optional)
   -h     Show help
 
 Examples:
   vt -d example.com -u
   vt -d example.com -s
-  vt -d example.com -a
+  vt -d example.com -ips
   vt -ip 8.8.8.8 -u
   vt -ip 8.8.8.8 -s
-  vt -ip 8.8.8.8 -a
+  vt -ip 8.8.8.8 -ips
   vt -l domains.txt -u
   vt -l domains.txt -u -t 5
   vt -l domains.txt -u -t 5 -dl 0.5
+  vt -d example.com -u -tm 10
   vt -d example.com -u -o urls.txt
   vt -d example.com -u | sort -u
 `
 )
 
 type Options struct {
-	Domain   string
-	IP       string
-	ListFile string
-	URLs     bool
-	Subs     bool
-	All      bool
-	Output   string
-	Config   string
-	Threads  int
-	Delay    float64
-	DelaySet bool
-	Help     bool
+	Domain     string
+	IP         string
+	ListFile   string
+	URLs       bool
+	Subs       bool
+	IPs        bool
+	Output     string
+	Config     string
+	Threads    int
+	Delay      float64
+	DelaySet   bool
+	Timeout    float64
+	TimeoutSet bool
+	Help       bool
 }
 
 func Parse(args []string) (Options, error) {
@@ -82,11 +87,12 @@ func Parse(args []string) (Options, error) {
 	fs.StringVar(&opt.ListFile, "l", "", "input file")
 	fs.BoolVar(&opt.URLs, "u", false, "extract URLs")
 	fs.BoolVar(&opt.Subs, "s", false, "extract subdomains")
-	fs.BoolVar(&opt.All, "a", false, "extract URLs and subdomains")
+	fs.BoolVar(&opt.IPs, "ips", false, "extract IP addresses")
 	fs.StringVar(&opt.Output, "o", "", "output file")
 	fs.StringVar(&opt.Config, "c", "", "config file path")
 	fs.IntVar(&opt.Threads, "t", defaultThreads, "threads")
 	fs.Float64Var(&opt.Delay, "dl", 1, "delay in seconds between requests")
+	fs.Float64Var(&opt.Timeout, "tm", 6, "HTTP request timeout in seconds")
 	fs.BoolVar(&opt.Help, "h", false, "help")
 	fs.BoolVar(&opt.Help, "help", false, "help")
 
@@ -97,8 +103,11 @@ func Parse(args []string) (Options, error) {
 		return Options{}, fmt.Errorf("unexpected argument: %s\n\n%s", fs.Arg(0), usageText)
 	}
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "dl" {
+		switch f.Name {
+		case "dl":
 			opt.DelaySet = true
+		case "tm":
+			opt.TimeoutSet = true
 		}
 	})
 	return opt, nil
@@ -112,14 +121,17 @@ type App struct {
 	Client *vtapi.Client
 	// DefaultDelay is used when -dl is not supplied on the command line.
 	DefaultDelay time.Duration
+	// DefaultTimeout is used when -tm is not supplied on the command line.
+	DefaultTimeout time.Duration
 }
 
 func NewApp() *App {
 	return &App{
-		Stdout:       os.Stdout,
-		Stderr:       os.Stderr,
-		Client:       vtapi.New(),
-		DefaultDelay: defaultRequestGap,
+		Stdout:         os.Stdout,
+		Stderr:         os.Stderr,
+		Client:         vtapi.New(),
+		DefaultDelay:   defaultRequestGap,
+		DefaultTimeout: defaultTimeout,
 	}
 }
 
@@ -146,7 +158,12 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		return 2
 	}
 
-	mode, err := extract.ParseMode(opt.URLs, opt.Subs, opt.All)
+	if opt.TimeoutSet && opt.Timeout <= 0 {
+		fmt.Fprintf(a.Stderr, "[-] -tm must be greater than 0\n\n%s", usageText)
+		return 2
+	}
+
+	mode, err := extract.ParseMode(opt.URLs, opt.Subs, opt.IPs)
 	if err != nil {
 		fmt.Fprintf(a.Stderr, "[-] %s\n\n%s", err.Error(), usageText)
 		return 2
@@ -190,11 +207,23 @@ func (a *App) Run(ctx context.Context, args []string) int {
 	if gap < 0 {
 		gap = 0
 	}
+
+	timeout := a.DefaultTimeout
+	if timeout <= 0 {
+		timeout = defaultTimeout
+	}
+	if opt.TimeoutSet {
+		timeout = time.Duration(opt.Timeout * float64(time.Second))
+	}
+	if timeout > 0 {
+		client.SetTimeout(timeout)
+	}
 	rotator := newKeyRotator(cfg.Keys(), client, out)
 	slots := startWorkers(ctx, rotator, jobs, mode, opt.Threads, newRateLimiter(gap))
 
 	globalURLs := unique.New()
 	globalSubs := unique.New()
+	globalIPs := unique.New()
 	failures := 0
 
 	for i, job := range jobs {
@@ -220,15 +249,18 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		}
 
 		res := outcome.res
-		if mode == extract.ModeURLs || mode == extract.ModeAll {
+		switch mode {
+		case extract.ModeURLs:
 			out.Statusf("[+] Found %d URLs", len(res.URLs))
-		}
-		if mode == extract.ModeSubdomains || mode == extract.ModeAll {
+		case extract.ModeSubdomains:
 			out.Statusf("[+] Found %d Subdomains", len(res.Subdomains))
+		case extract.ModeIPs:
+			out.Statusf("[+] Found %d IPs", len(res.IPs))
 		}
 
 		newURLs := takeNew(globalURLs, res.URLs)
 		newSubs := takeNew(globalSubs, res.Subdomains)
+		newIPs := takeNew(globalIPs, res.IPs)
 
 		fmt.Fprintln(a.Stderr)
 
@@ -236,17 +268,15 @@ func (a *App) Run(ctx context.Context, args []string) int {
 			out.Errorf("%s", err.Error())
 			return 1
 		}
-		if mode == extract.ModeAll && len(newURLs) > 0 && len(newSubs) > 0 {
-			if err := out.BlankLine(); err != nil {
-				out.Errorf("%s", err.Error())
-				return 1
-			}
-		}
 		if err := out.WriteResults(newSubs); err != nil {
 			out.Errorf("%s", err.Error())
 			return 1
 		}
-		if len(newURLs) > 0 || len(newSubs) > 0 {
+		if err := out.WriteResults(newIPs); err != nil {
+			out.Errorf("%s", err.Error())
+			return 1
+		}
+		if len(newURLs) > 0 || len(newSubs) > 0 || len(newIPs) > 0 {
 			fmt.Fprintln(a.Stderr)
 		}
 	}

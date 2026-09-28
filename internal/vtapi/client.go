@@ -15,7 +15,7 @@ import (
 const (
 	defaultBaseURL = "https://www.virustotal.com/vtapi/v2/domain/report"
 	defaultIPURL   = "https://www.virustotal.com/vtapi/v2/ip-address/report"
-	defaultTimeout = 30 * time.Second
+	defaultTimeout = 6 * time.Second
 	maxBodyBytes   = 32 * 1024 * 1024
 )
 
@@ -55,18 +55,25 @@ func New() *Client {
 	return NewWithOptions(defaultBaseURL, nil)
 }
 
+func defaultHTTPClient(timeout time.Duration) *http.Client {
+	if timeout <= 0 {
+		timeout = defaultTimeout
+	}
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			MaxIdleConns:          10,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
+	}
+}
+
 func NewWithOptions(baseURL string, httpClient *http.Client) *Client {
 	if httpClient == nil {
-		httpClient = &http.Client{
-			Timeout: defaultTimeout,
-			Transport: &http.Transport{
-				Proxy:                 http.ProxyFromEnvironment,
-				MaxIdleConns:          10,
-				IdleConnTimeout:       90 * time.Second,
-				TLSHandshakeTimeout:   10 * time.Second,
-				ExpectContinueTimeout: 1 * time.Second,
-			},
-		}
+		httpClient = defaultHTTPClient(defaultTimeout)
 	}
 	if strings.TrimSpace(baseURL) == "" {
 		baseURL = defaultBaseURL
@@ -80,6 +87,19 @@ func NewWithOptions(baseURL string, httpClient *http.Client) *Client {
 		baseURL: baseURL,
 		ipURL:   ipURL,
 	}
+}
+
+func (c *Client) SetTimeout(timeout time.Duration) {
+	if c == nil || timeout <= 0 {
+		return
+	}
+	if c.http == nil {
+		c.http = defaultHTTPClient(timeout)
+		return
+	}
+	clone := *c.http
+	clone.Timeout = timeout
+	c.http = &clone
 }
 
 func (c *Client) Fetch(ctx context.Context, domain, apiKey string) ([]byte, error) {
