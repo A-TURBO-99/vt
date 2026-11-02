@@ -8,20 +8,29 @@ import (
 	"strings"
 )
 
-const MaxAPIKeys = 5
+const MaxAPIKeys = 10
 
 type Config struct {
-	APIKey1 string `json:"api_key_1"`
-	APIKey2 string `json:"api_key_2"`
-	APIKey3 string `json:"api_key_3"`
-	APIKey4 string `json:"api_key_4"`
-	APIKey5 string `json:"api_key_5"`
+	APIKey1  string `json:"api_key_1"`
+	APIKey2  string `json:"api_key_2"`
+	APIKey3  string `json:"api_key_3"`
+	APIKey4  string `json:"api_key_4"`
+	APIKey5  string `json:"api_key_5"`
+	APIKey6  string `json:"api_key_6"`
+	APIKey7  string `json:"api_key_7"`
+	APIKey8  string `json:"api_key_8"`
+	APIKey9  string `json:"api_key_9"`
+	APIKey10 string `json:"api_key_10"`
 }
 
 func (c Config) Keys() []string {
-	raw := []string{c.APIKey1, c.APIKey2, c.APIKey3, c.APIKey4, c.APIKey5}
-	seen := make(map[string]struct{}, len(raw))
-	out := make([]string, 0, len(raw))
+	raw := make([]string, 0, MaxAPIKeys)
+	raw = append(raw,
+		c.APIKey1, c.APIKey2, c.APIKey3, c.APIKey4, c.APIKey5,
+		c.APIKey6, c.APIKey7, c.APIKey8, c.APIKey9, c.APIKey10,
+	)
+	seen := make(map[string]struct{}, MaxAPIKeys)
+	out := make([]string, 0, MaxAPIKeys)
 	for _, key := range raw {
 		key = normalizeKey(key)
 		if key == "" {

@@ -41,7 +41,12 @@ API keys are **not** passed on the command line.
   "api_key_2": "YOUR_API_KEY_2",
   "api_key_3": "YOUR_API_KEY_3",
   "api_key_4": "YOUR_API_KEY_4",
-  "api_key_5": "YOUR_API_KEY_5"
+  "api_key_5": "YOUR_API_KEY_5",
+  "api_key_6": "YOUR_API_KEY_6",
+  "api_key_7": "YOUR_API_KEY_7",
+  "api_key_8": "YOUR_API_KEY_8",
+  "api_key_9": "YOUR_API_KEY_9",
+  "api_key_10": "YOUR_API_KEY_10"
 }
 ```
 
@@ -49,10 +54,13 @@ Behavior:
 
 1. Requests use `api_key_1` until VirusTotal returns a rate-limit or quota error.
 2. Then `vt` switches to `api_key_2` and keeps using it until that key is also limited.
-3. The same happens for `api_key_3`, `api_key_4`, and `api_key_5`.
-4. Empty or placeholder slots are skipped. You can fill only the keys you have.
+3. The same rotation continues in order through `api_key_3` up to `api_key_10`.
+4. Empty or placeholder slots are skipped. You can configure fewer than ten keys.
 5. Invalid keys are skipped and the next configured key is used.
-6. API keys are never printed to stdout, stderr, logs, or error messages.
+6. If all configured keys are exhausted, the request stops with an error.
+7. API keys are never printed to stdout, stderr, logs, or error messages.
+
+Copy `config/config.json.example` to `config/config.json`, then fill in the keys you have. Keep `config/config.json` private and do not commit it to Git.
 
 The tool looks for `config/config.json` in the current working directory and next to the binary.
 

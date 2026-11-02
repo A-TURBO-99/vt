@@ -21,8 +21,8 @@ import (
 func writeConfig(t *testing.T, keys ...string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.json")
-	fields := make([]string, 0, 5)
-	for i := 0; i < 5; i++ {
+	fields := make([]string, 0, 10)
+	for i := 0; i < 10; i++ {
 		val := ""
 		if i < len(keys) {
 			val = keys[i]
@@ -80,33 +80,18 @@ func TestRunExtractsURLs(t *testing.T) {
 	}
 }
 
-func TestQuotaRotatesThroughKeys(t *testing.T) {
+func TestQuotaRotatesThroughTenKeys(t *testing.T) {
 	var mu sync.Mutex
 	var used []string
-	counts := map[string]int{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := r.URL.Query().Get("apikey")
 		domain := r.URL.Query().Get("domain")
 		mu.Lock()
 		used = append(used, key)
-		counts[key]++
-		n := counts[key]
 		mu.Unlock()
 
-		switch key {
-		case "k1":
-			if n >= 2 {
-				w.WriteHeader(http.StatusTooManyRequests)
-				return
-			}
-		case "k2":
-			if n >= 2 {
-				w.WriteHeader(http.StatusTooManyRequests)
-				return
-			}
-		case "k3":
-		default:
-			w.WriteHeader(http.StatusForbidden)
+		if key != "k10" {
+			w.WriteHeader(http.StatusTooManyRequests)
 			return
 		}
 		io.WriteString(w, `{"response_code":1,"subdomains":["`+domain+`.ok"]}`)
@@ -124,7 +109,7 @@ func TestQuotaRotatesThroughKeys(t *testing.T) {
 		Stderr: &stderr,
 		Client: vtapi.NewWithOptions(srv.URL, srv.Client()),
 	}
-	cfg := writeConfig(t, "k1", "k2", "k3", "k4", "k5")
+	cfg := writeConfig(t, "k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9", "k10")
 	code := app.Run(context.Background(), []string{"-l", list, "-s", "-t", "1", "-c", cfg})
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
@@ -140,15 +125,25 @@ func TestQuotaRotatesThroughKeys(t *testing.T) {
 	if !strings.Contains(stderr.String(), "Switching to the next API key") {
 		t.Fatalf("missing switch message: %s", stderr.String())
 	}
-	for _, key := range []string{"k1", "k2", "k3", "k4", "k5"} {
+	for _, key := range []string{"k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9", "k10"} {
 		if strings.Contains(stderr.String(), key) || strings.Contains(stdout.String(), key) {
 			t.Fatalf("api key leaked: %s", key)
 		}
 	}
+
 	mu.Lock()
 	defer mu.Unlock()
-	if len(used) < 3 {
-		t.Fatalf("used=%v", used)
+	if len(used) < 10 {
+		t.Fatalf("expected the rotator to reach key 10; used=%v", used)
+	}
+	for i := 0; i < 10; i++ {
+		want := fmt.Sprintf("k%d", i+1)
+		if used[i] != want {
+			t.Fatalf("key sequence at index %d: got=%q want=%q; used=%v", i, used[i], want, used)
+		}
+	}
+	if used[9] != "k10" {
+		t.Fatalf("tenth key was not used: %v", used)
 	}
 }
 
