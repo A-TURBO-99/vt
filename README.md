@@ -33,32 +33,30 @@ cp ~/go/bin/vt /usr/local/bin
 
 API keys are **not** passed on the command line.
 
-`config/config.json`:
+`config/config.json` supports a dynamic `api_keys` array. Add as many keys as you need; there is no fixed limit:
 
 ```json
 {
-  "api_key_1": "YOUR_API_KEY_1",
-  "api_key_2": "YOUR_API_KEY_2",
-  "api_key_3": "YOUR_API_KEY_3",
-  "api_key_4": "YOUR_API_KEY_4",
-  "api_key_5": "YOUR_API_KEY_5",
-  "api_key_6": "YOUR_API_KEY_6",
-  "api_key_7": "YOUR_API_KEY_7",
-  "api_key_8": "YOUR_API_KEY_8",
-  "api_key_9": "YOUR_API_KEY_9",
-  "api_key_10": "YOUR_API_KEY_10"
+  "api_keys": [
+    "YOUR_API_KEY_1",
+    "YOUR_API_KEY_2",
+    "YOUR_API_KEY_3"
+  ]
 }
 ```
 
+The legacy `api_key_1` through `api_key_10` format is still supported for existing configurations. When both formats are present, keys in `api_keys` are used first, followed by legacy keys. Empty values, placeholders, and duplicates are ignored.
+
 Behavior:
 
-1. Requests use `api_key_1` until VirusTotal returns a rate-limit or quota error.
-2. Then `vt` switches to `api_key_2` and keeps using it until that key is also limited.
-3. The same rotation continues in order through `api_key_3` up to `api_key_10`.
-4. Empty or placeholder slots are skipped. You can configure fewer than ten keys.
-5. Invalid keys are skipped and the next configured key is used.
-6. If all configured keys are exhausted, the request stops with an error.
+1. Requests start with the first configured API key.
+2. On a rate-limit or quota error, `vt` switches to the next available key.
+3. After the last available key is rate-limited, rotation wraps around and reuses the first available key.
+4. Invalid/rejected keys are skipped permanently for the current run; quota-limited keys remain in the rotation.
+5. If every key is quota-limited, the tool keeps cycling until a request succeeds or the run is interrupted (for example, with Ctrl+C). If every key is invalid/rejected, the request stops with an error.
+6. The `-dl` delay is applied to retries as well as new targets.
 7. API keys are never printed to stdout, stderr, logs, or error messages.
+8. The local `config/config.json` is ignored by Git so credentials are not committed accidentally.
 
 Copy `config/config.json.example` to `config/config.json`, then fill in the keys you have. Keep `config/config.json` private and do not commit it to Git.
 

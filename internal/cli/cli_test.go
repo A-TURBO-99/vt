@@ -21,15 +21,11 @@ import (
 func writeConfig(t *testing.T, keys ...string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.json")
-	fields := make([]string, 0, 10)
-	for i := 0; i < 10; i++ {
-		val := ""
-		if i < len(keys) {
-			val = keys[i]
-		}
-		fields = append(fields, fmt.Sprintf(`"api_key_%d":"%s"`, i+1, val))
+	quoted := make([]string, 0, len(keys))
+	for _, key := range keys {
+		quoted = append(quoted, fmt.Sprintf("%q", key))
 	}
-	body := "{" + strings.Join(fields, ",") + "}"
+	body := `{"api_keys":[` + strings.Join(quoted, ",") + `]}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -144,6 +140,135 @@ func TestQuotaRotatesThroughTenKeys(t *testing.T) {
 	}
 	if used[9] != "k10" {
 		t.Fatalf("tenth key was not used: %v", used)
+	}
+}
+
+func TestQuotaRotationWrapsToFirstKey(t *testing.T) {
+	var mu sync.Mutex
+	var used []string
+	firstKeyHits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := r.URL.Query().Get("apikey")
+		mu.Lock()
+		used = append(used, key)
+		if key == "k1" {
+			firstKeyHits++
+		}
+		firstHit := firstKeyHits == 1
+		mu.Unlock()
+
+		if key == "k1" && !firstHit {
+			io.WriteString(w, `{"response_code":1,"subdomains":["wrapped.example.com"]}`)
+			return
+		}
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Client: vtapi.NewWithOptions(srv.URL, srv.Client()),
+	}
+	cfg := writeConfig(t, "k1", "k2")
+	code := app.Run(context.Background(), []string{"-d", "example.com", "-s", "-c", cfg})
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	if got := splitLines(stdout.String()); len(got) != 1 || got[0] != "wrapped.example.com" {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"k1", "k2", "k1"}
+	if len(used) != len(want) {
+		t.Fatalf("used=%v want=%v", used, want)
+	}
+	for i := range want {
+		if used[i] != want[i] {
+			t.Fatalf("used=%v want=%v", used, want)
+		}
+	}
+	if !strings.Contains(stderr.String(), "restarting rotation from the first available API key") {
+		t.Fatalf("missing wrap message: %s", stderr.String())
+	}
+}
+
+func TestAllQuotaKeysKeepCyclingUntilContextCancellation(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		Client:       vtapi.NewWithOptions(srv.URL, srv.Client()),
+		DefaultDelay: time.Millisecond,
+	}
+	cfg := writeConfig(t, "k1", "k2", "k3")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+
+	code := app.Run(ctx, []string{"-d", "example.com", "-s", "-c", cfg})
+	if code != 1 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	if hits.Load() < 3 {
+		t.Fatalf("expected keys to be retried after a full cycle; requests=%d", hits.Load())
+	}
+	if !strings.Contains(stderr.String(), "interrupted") {
+		t.Fatalf("expected context cancellation message, stderr=%s", stderr.String())
+	}
+}
+
+func TestRejectedAPIKeyIsSkippedPermanently(t *testing.T) {
+	var mu sync.Mutex
+	var used []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := r.URL.Query().Get("apikey")
+		mu.Lock()
+		used = append(used, key)
+		mu.Unlock()
+		if key == "bad" {
+			w.WriteHeader(http.StatusForbidden)
+			io.WriteString(w, `{"response_code":-1,"verbose_msg":"Invalid key"}`)
+			return
+		}
+		if key == "good" && len(used) >= 3 {
+			io.WriteString(w, `{"response_code":1,"subdomains":["ok.example.com"]}`)
+			return
+		}
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Client: vtapi.NewWithOptions(srv.URL, srv.Client()),
+	}
+	cfg := writeConfig(t, "bad", "good")
+	code := app.Run(context.Background(), []string{"-d", "example.com", "-s", "-c", cfg})
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"bad", "good", "good"}
+	if len(used) != len(want) {
+		t.Fatalf("used=%v want=%v", used, want)
+	}
+	for i := range want {
+		if used[i] != want[i] {
+			t.Fatalf("used=%v want=%v", used, want)
+		}
 	}
 }
 

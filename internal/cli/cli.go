@@ -218,8 +218,9 @@ func (a *App) Run(ctx context.Context, args []string) int {
 	if timeout > 0 {
 		client.SetTimeout(timeout)
 	}
-	rotator := newKeyRotator(cfg.Keys(), client, out)
-	slots := startWorkers(ctx, rotator, jobs, mode, opt.Threads, newRateLimiter(gap))
+	limiter := newRateLimiter(gap)
+	rotator := newKeyRotator(cfg.Keys(), client, out, limiter)
+	slots := startWorkers(ctx, rotator, jobs, mode, opt.Threads, limiter)
 
 	globalURLs := unique.New()
 	globalSubs := unique.New()

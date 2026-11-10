@@ -8,9 +8,11 @@ import (
 	"strings"
 )
 
-const MaxAPIKeys = 10
-
+// Config supports an unlimited api_keys array and the legacy api_key_1 through
+// api_key_10 fields for backward compatibility.
 type Config struct {
+	APIKeys []string `json:"api_keys"`
+
 	APIKey1  string `json:"api_key_1"`
 	APIKey2  string `json:"api_key_2"`
 	APIKey3  string `json:"api_key_3"`
@@ -23,14 +25,19 @@ type Config struct {
 	APIKey10 string `json:"api_key_10"`
 }
 
+// Keys returns configured API keys in order, trimming whitespace and
+// discarding empty values, placeholders, and duplicates. The dynamic array
+// comes first; legacy fields are appended so old config files keep working.
 func (c Config) Keys() []string {
-	raw := make([]string, 0, MaxAPIKeys)
+	raw := make([]string, 0, len(c.APIKeys)+10)
+	raw = append(raw, c.APIKeys...)
 	raw = append(raw,
 		c.APIKey1, c.APIKey2, c.APIKey3, c.APIKey4, c.APIKey5,
 		c.APIKey6, c.APIKey7, c.APIKey8, c.APIKey9, c.APIKey10,
 	)
-	seen := make(map[string]struct{}, MaxAPIKeys)
-	out := make([]string, 0, MaxAPIKeys)
+
+	seen := make(map[string]struct{}, len(raw))
+	out := make([]string, 0, len(raw))
 	for _, key := range raw {
 		key = normalizeKey(key)
 		if key == "" {
@@ -62,7 +69,7 @@ func Load(explicitPath string) (Config, string, error) {
 	}
 
 	if len(cfg.Keys()) == 0 {
-		return Config{}, "", fmt.Errorf("missing API key in %s (set api_key_1)", path)
+		return Config{}, "", fmt.Errorf("missing API key in %s (set api_keys or api_key_1)", path)
 	}
 
 	return cfg, path, nil
